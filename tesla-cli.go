@@ -430,6 +430,60 @@ func ensureVehicleAwake(vin string, token string, proxyURL string) error {
 	return fmt.Errorf("vehicle did not wake up after %d seconds", maxAttempts)
 }
 
+// getVehicleData fetches vehicle_data, optionally restricted to specific endpoints (e.g. "charge_state")
+func getVehicleData(vin string, token string, proxyURL string, endpoints string) (map[string]interface{}, error) {
+	endpoint := fmt.Sprintf("%s/api/1/vehicles/%s/vehicle_data", proxyURL, vin)
+	if endpoints != "" {
+		endpoint += "?endpoints=" + url.QueryEscape(endpoints)
+	}
+
+	// Create HTTP client with insecure TLS
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+		Timeout: 10 * time.Second,
+	}
+
+	req, err := http.NewRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var responseData map[string]interface{}
+	if err := json.Unmarshal(body, &responseData); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("vehicle_data request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	if errMsg, ok := responseData["error"].(string); ok && errMsg != "" {
+		return nil, fmt.Errorf("vehicle_data error: %s", errMsg)
+	}
+
+	data, ok := responseData["response"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected response format")
+	}
+	return data, nil
+}
+
 // sendCommand sends a command to the Tesla proxy
 func sendCommand(vin string, token string, command string, proxyURL string, params map[string]interface{}) error {
 	endpoint := fmt.Sprintf("%s/api/1/vehicles/%s/command/%s", proxyURL, vin, command)
@@ -530,8 +584,10 @@ func main() {
 		fmt.Println("2. Unlock Doors")
 		fmt.Println("3. Sentry Mode ON")
 		fmt.Println("4. Sentry Mode OFF")
-		fmt.Println("5. Quit")
-		fmt.Print("\nEnter choice [1-5]: ")
+		fmt.Println("5. Show Battery Level")
+		fmt.Println("6. Show Full Vehicle Status")
+		fmt.Println("7. Quit")
+		fmt.Print("\nEnter choice [1-7]: ")
 
 		choice, _ := reader.ReadString('\n')
 		choice = strings.TrimSpace(choice)
@@ -580,11 +636,38 @@ func main() {
 			}
 
 		case "5":
+			fmt.Println("🔋 Fetching battery level...")
+			if err := ensureVehicleAwake(vehicleID, tokens.AccessToken, proxyURL); err != nil {
+				fmt.Printf("❌ Error: Could not wake vehicle: %v\n", err)
+			} else if data, err := getVehicleData(vehicleID, tokens.AccessToken, proxyURL, "charge_state"); err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+			} else if chargeState, ok := data["charge_state"].(map[string]interface{}); ok {
+				if level, ok := chargeState["battery_level"].(float64); ok {
+					fmt.Printf("✅ Battery level: %.0f%%\n", level)
+				} else {
+					fmt.Println("❌ Error: battery_level not found in response")
+				}
+			} else {
+				fmt.Println("❌ Error: charge_state not found in response")
+			}
+
+		case "6":
+			fmt.Println("📊 Fetching full vehicle status...")
+			if err := ensureVehicleAwake(vehicleID, tokens.AccessToken, proxyURL); err != nil {
+				fmt.Printf("❌ Error: Could not wake vehicle: %v\n", err)
+			} else if data, err := getVehicleData(vehicleID, tokens.AccessToken, proxyURL, ""); err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+			} else {
+				pretty, _ := json.MarshalIndent(data, "", "  ")
+				fmt.Println(string(pretty))
+			}
+
+		case "7":
 			fmt.Println("Goodbye! 👋")
 			return
 
 		default:
-			fmt.Println("❌ Invalid choice. Please enter 1-5.")
+			fmt.Println("❌ Invalid choice. Please enter 1-7.")
 		}
 
 		fmt.Println()
