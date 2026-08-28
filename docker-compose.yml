@@ -34,6 +34,7 @@ services:
 
   tesla-cli:
     build: .
+    image: tesla-fleet-api-sdk-commands-demo:latest
     container_name: tesla-cli
     # Il codice chiama https://localhost:4443: condividere il network namespace del proxy evita di modificare l'URL hardcoded.
     network_mode: "service:tesla-proxy"
