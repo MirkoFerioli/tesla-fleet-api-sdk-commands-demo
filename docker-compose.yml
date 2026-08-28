@@ -32,6 +32,21 @@ services:
     networks:
       - tesla-network
 
+  tesla-cli:
+    build: .
+    container_name: tesla-cli
+    # Il codice chiama https://localhost:4443: condividere il network namespace del proxy evita di modificare l'URL hardcoded.
+    network_mode: "service:tesla-proxy"
+    depends_on:
+      tesla-proxy:
+        condition: service_healthy
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./tesla-tokens.json:/app/tesla-tokens.json
+    stdin_open: true
+    tty: true
+    restart: "no"
+
 networks:
   tesla-network:
     driver: bridge
