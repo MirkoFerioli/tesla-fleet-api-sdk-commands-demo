@@ -6,6 +6,7 @@ services:
     container_name: tesla-http-proxy
     ports:
       - "4443:4443"
+      - "8080:8080"  # callback OAuth usato da tesla-cli (condivide il network namespace)
     volumes:
       - ./config:/config
       - ./tesla-tokens.json:/app/tesla-tokens.json:ro
