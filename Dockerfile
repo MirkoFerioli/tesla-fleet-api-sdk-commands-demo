@@ -8,7 +8,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o tesla-cli .
+RUN CGO_ENABLED=0 GOOS=linux go build -o tesla-api .
 
 FROM alpine:latest
 
@@ -16,8 +16,8 @@ RUN apk --no-cache add ca-certificates
 
 WORKDIR /app
 
-COPY --from=builder /src/tesla-cli .
+COPY --from=builder /src/tesla-api .
 
-EXPOSE 8080
+EXPOSE 8000 8080
 
-CMD ["./tesla-cli"]
+CMD ["./tesla-api"]

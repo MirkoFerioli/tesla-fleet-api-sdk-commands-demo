@@ -1,75 +1,114 @@
-# Docker: build e push su registry
+# Docker: build, rete e servizi
 
-## 1. Build dell'immagine locale
+Il container applicativo ora esegue `tesla-api` che espone un servizio API HTTP sulla porta `8000` e usa la porta `8080` per il callback OAuth Tesla.
+
+## Build locale
 
 ```bash
-docker build -t tesla-fleet-api-sdk-commands-demo:latest .
+docker build -t tesla-fleet-api-service:latest .
 ```
 
-## 2. Test locale
-
-L'app legge `.env` come file fisico nella working dir (non come variabili d'ambiente), quindi va montato come volume:
+## Avvio stack completo
 
 ```bash
-docker run --rm -p 8080:8080 \
+docker compose up --build -d
+```
+
+Servizi nel compose:
+
+- `tesla-proxy`
+- `tesla-api`
+- `influxdb`
+- `node-red`
+- `grafana`
+
+Tutti sono collegati a `tesla-network`. I container si chiamano tra loro con i nomi servizio Docker:
+
+- `tesla-api` -> `https://tesla-proxy:4443`
+- `tesla-api` -> `http://influxdb:8086`
+- `node-red` -> `http://tesla-api:8000`
+- `grafana` -> `http://influxdb:8086`
+
+## Variabili principali
+
+Il servizio Go legge `.env` e variabili d'ambiente Docker. Le variabili Docker hanno precedenza.
+
+| Variabile | Default compose | Descrizione |
+|---|---|---|
+| `TESLA_API_LISTEN_ADDR` | `:8000` | porta HTTP API |
+| `TESLA_PROXY_URL` | `https://tesla-proxy:4443` | URL interno del proxy Tesla |
+| `TESLA_TOKEN_PATH` | `/app/tesla-tokens.json` | file token montato in volume |
+| `TESLA_RESET_TOKEN_ON_START` | `true` | pulisce il token a ogni restart |
+| `INFLUX_URL` | `http://influxdb:8086` | URL interno InfluxDB |
+| `INFLUX_ORG` | `tesla` | organization InfluxDB |
+| `INFLUX_BUCKET` | `vehicle` | bucket InfluxDB |
+| `INFLUX_TOKEN` | `${INFLUX_ADMIN_TOKEN:-tesla-dev-token-change-me}` | token API InfluxDB |
+
+Per password e token locali puoi creare variabili shell prima dell'avvio:
+
+```bash
+export INFLUX_ADMIN_TOKEN='scegli-un-token-lungo'
+export INFLUX_ADMIN_PASSWORD='scegli-una-password'
+export GRAFANA_ADMIN_PASSWORD='scegli-una-password'
+docker compose up --build -d
+```
+
+## Token Tesla al riavvio
+
+Il compose imposta:
+
+```yaml
+TESLA_RESET_TOKEN_ON_START=true
+```
+
+Questo comportamento e intenzionale: se `tesla-tokens.json` esiste gia e causa blocchi all'avvio, il servizio lo pulisce prima di caricare i token. Il nuovo OAuth parte alla prima chiamata Tesla, per esempio `POST /api/vehicle/poll`.
+
+## Test container singolo
+
+Per testare solo il servizio API fuori dal compose devi fornire un proxy raggiungibile e InfluxDB raggiungibile:
+
+```bash
+docker run --rm \
+  -p 8000:8000 \
+  -p 8080:8080 \
   -v "$(pwd)/.env:/app/.env:ro" \
   -v "$(pwd)/tesla-tokens.json:/app/tesla-tokens.json" \
-  tesla-fleet-api-sdk-commands-demo:latest
+  -e TESLA_PROXY_URL=https://host.docker.internal:4443 \
+  -e INFLUX_URL=http://host.docker.internal:8086 \
+  -e INFLUX_ORG=tesla \
+  -e INFLUX_BUCKET=vehicle \
+  -e INFLUX_TOKEN="$INFLUX_ADMIN_TOKEN" \
+  tesla-fleet-api-service:latest
 ```
 
-`tesla-tokens.json` va montato in scrittura (senza `:ro`) perché il programma aggiorna i token dopo il refresh OAuth.
+## Push su registry
 
-## 3. Tag per il registry
-
-Sostituisci `<registry>` e `<utente>` con i tuoi valori (es. Docker Hub, GHCR, ACR).
+Sostituisci `<registry>` e `<utente>` con i tuoi valori.
 
 ```bash
-# Docker Hub
-docker tag tesla-fleet-api-sdk-commands-demo:latest <utente>/tesla-fleet-api-sdk-commands-demo:latest
-
-# GitHub Container Registry
-docker tag tesla-fleet-api-sdk-commands-demo:latest ghcr.io/<utente>/tesla-fleet-api-sdk-commands-demo:latest
-
-# Azure Container Registry
-docker tag tesla-fleet-api-sdk-commands-demo:latest <registry>.azurecr.io/tesla-fleet-api-sdk-commands-demo:latest
+docker tag tesla-fleet-api-service:latest <utente>/tesla-fleet-api-service:latest
+docker push <utente>/tesla-fleet-api-service:latest
 ```
 
-## 4. Login al registry
+Per GHCR:
 
 ```bash
-# Docker Hub
-docker login
-
-# GitHub Container Registry (usa un Personal Access Token con scope write:packages)
-docker login ghcr.io -u <utente>
-
-# Azure Container Registry
-az acr login --name <registry>
+docker tag tesla-fleet-api-service:latest ghcr.io/<utente>/tesla-fleet-api-service:latest
+docker push ghcr.io/<utente>/tesla-fleet-api-service:latest
 ```
 
-## 5. Push dell'immagine
+## Controlli utili
 
 ```bash
-# Docker Hub
-docker push <utente>/tesla-fleet-api-sdk-commands-demo:latest
-
-# GitHub Container Registry
-docker push ghcr.io/<utente>/tesla-fleet-api-sdk-commands-demo:latest
-
-# Azure Container Registry
-docker push <registry>.azurecr.io/tesla-fleet-api-sdk-commands-demo:latest
+docker compose ps
+docker compose logs -f tesla-api
+docker compose logs -f tesla-proxy
+curl http://localhost:8000/health
+curl -k https://localhost:4443/health
 ```
 
-## 6. Build multi-architettura (opzionale, amd64 + arm64)
+## Note di sicurezza
 
-```bash
-docker buildx create --use
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t <utente>/tesla-fleet-api-sdk-commands-demo:latest \
-  --push .
-```
-
-## Note
-
-- Il file `.dockerignore` esclude `.git`, `.env` e altri file non necessari alla build: verifica che le tue credenziali non finiscano mai nell'immagine.
-- Usa un tag di versione (es. `:v1.0.0`) invece di `:latest` per deploy ripetibili.
+- Non committare `.env`, `tesla-tokens.json`, file `.pem`, `config/` o directory dati locali.
+- Cambia `INFLUX_ADMIN_TOKEN`, `INFLUX_ADMIN_PASSWORD` e `GRAFANA_ADMIN_PASSWORD` se esponi i servizi oltre il tuo host.
+- Node-RED deve chiamare la nuova API Go; non deve contenere token Tesla.

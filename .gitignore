@@ -13,6 +13,13 @@ config/
 # Go binaries
 tesla-cli
 tesla-cli.exe
+tesla-api
+tesla-api.exe
+
+# Local service data
+influxdb-data/
+node-red-data/
+grafana-data/
 
 # IDE
 .vscode/

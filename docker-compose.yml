@@ -6,10 +6,8 @@ services:
     container_name: tesla-http-proxy
     ports:
       - "4443:4443"
-      - "8080:8080"  # callback OAuth usato da tesla-cli (condivide il network namespace)
     volumes:
       - ./config:/config
-      - ./tesla-tokens.json:/app/tesla-tokens.json:ro
     environment:
       - TESLA_HTTP_PROXY_TLS_CERT=/config/tls-cert.pem
       - TESLA_HTTP_PROXY_TLS_KEY=/config/tls-key.pem
@@ -33,21 +31,97 @@ services:
     networks:
       - tesla-network
 
-  tesla-cli:
+  tesla-api:
     build: .
-    image: tesla-fleet-api-sdk-commands-demo:latest
-    container_name: tesla-cli
-    # Il codice chiama https://localhost:4443: condividere il network namespace del proxy evita di modificare l'URL hardcoded.
-    network_mode: "service:tesla-proxy"
+    image: tesla-fleet-api-service:latest
+    container_name: tesla-api
     depends_on:
       tesla-proxy:
         condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+      - "8080:8080"  # callback OAuth Tesla configurato in TESLA_REDIRECT_URI
     volumes:
       - ./.env:/app/.env:ro
       - ./tesla-tokens.json:/app/tesla-tokens.json
-    stdin_open: true
-    tty: true
-    restart: "no"
+    environment:
+      - TESLA_API_LISTEN_ADDR=:8000
+      - TESLA_PROXY_URL=https://tesla-proxy:4443
+      - TESLA_TOKEN_PATH=/app/tesla-tokens.json
+      - TESLA_RESET_TOKEN_ON_START=true
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_ORG=tesla
+      - INFLUX_BUCKET=vehicle
+      - INFLUX_TOKEN=${INFLUX_ADMIN_TOKEN:-tesla-dev-token-change-me}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - tesla-network
+
+  influxdb:
+    image: influxdb:2
+    container_name: tesla-influxdb
+    ports:
+      - "8086:8086"
+    volumes:
+      - ./influxdb-data:/var/lib/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUX_ADMIN_USER:-admin}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUX_ADMIN_PASSWORD:-change-me-please}
+      - DOCKER_INFLUXDB_INIT_ORG=tesla
+      - DOCKER_INFLUXDB_INIT_BUCKET=vehicle
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUX_ADMIN_TOKEN:-tesla-dev-token-change-me}
+    healthcheck:
+      test: ["CMD", "influx", "ping", "--host", "http://localhost:8086"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - tesla-network
+
+  node-red:
+    image: nodered/node-red:latest
+    container_name: tesla-node-red
+    depends_on:
+      tesla-api:
+        condition: service_healthy
+    ports:
+      - "1880:1880"
+    volumes:
+      - ./node-red-data:/data
+    restart: unless-stopped
+    networks:
+      - tesla-network
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: tesla-grafana
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - INFLUX_TOKEN=${INFLUX_ADMIN_TOKEN:-tesla-dev-token-change-me}
+    restart: unless-stopped
+    networks:
+      - tesla-network
 
 networks:
   tesla-network:

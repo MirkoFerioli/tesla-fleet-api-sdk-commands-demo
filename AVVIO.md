@@ -1,15 +1,24 @@
-# Guida completa: avviare proxy Tesla + tesla-cli con Docker Compose
+# Avvio stack Tesla API, InfluxDB, Node-RED e Grafana
 
-Questa guida avvia **entrambi** i servizi in Docker: il proxy HTTP ufficiale Tesla (`tesla-proxy`, firma i comandi col certificato TLS e la chiave Fleet) e il tuo programma (`tesla-cli`), già collegati tra loro nello stesso `docker-compose.yml`.
+Questa guida avvia tutto lo stack Docker:
 
-## 0. Prerequisiti
+- `tesla-proxy`: proxy ufficiale Tesla Vehicle Command, usato per firmare e inoltrare le chiamate.
+- `tesla-api`: servizio Go HTTP che legge la Tesla API, invia comandi generici e scrive direttamente su InfluxDB.
+- `influxdb`: database time-series per storico veicolo e audit comandi.
+- `node-red`: automazioni che chiamano la nuova API Go.
+- `grafana`: dashboard su InfluxDB.
 
-- Docker e Docker Compose installati.
-- `TESLA_CLIENT_ID`, `TESLA_CLIENT_SECRET` da [developer.tesla.com](https://developer.tesla.com).
-- `private-key.pem` (chiave privata Fleet, la controparte della chiave pubblica caricata sul veicolo) nella root del progetto.
+Tutti i container stanno sulla stessa rete Docker `tesla-network`. Dall'esterno usi lo stesso IP del computer e porte diverse.
+
+## 1. Prerequisiti
+
+- Docker e Docker Compose.
+- `TESLA_CLIENT_ID` e `TESLA_CLIENT_SECRET` da developer.tesla.com.
 - VIN del veicolo.
+- `private-key.pem` nella root del progetto.
+- Redirect URI Tesla configurata come `http://localhost:8080/callback`.
 
-## 1. Configura le credenziali
+## 2. Configurazione Tesla
 
 ```bash
 cp .env.example .env
@@ -24,100 +33,134 @@ TESLA_REDIRECT_URI=http://localhost:8080/callback
 TESLA_VEHICLE_VIN=xxx
 ```
 
-## 2. Genera certificati TLS e prepara la chiave Fleet
+Il compose imposta anche queste variabili per il servizio API:
+
+```ini
+TESLA_API_LISTEN_ADDR=:8000
+TESLA_PROXY_URL=https://tesla-proxy:4443
+TESLA_TOKEN_PATH=/app/tesla-tokens.json
+TESLA_RESET_TOKEN_ON_START=true
+INFLUX_URL=http://influxdb:8086
+INFLUX_ORG=tesla
+INFLUX_BUCKET=vehicle
+```
+
+Con `TESLA_RESET_TOKEN_ON_START=true`, a ogni riavvio il servizio Go pulisce `tesla-tokens.json`. Questo forza un nuovo OAuth ed evita il blocco che si verifica quando l'app trova un token gia presente.
+
+## 3. Preparazione proxy
 
 ```bash
 bash setup-proxy.sh
-```
-
-Questo crea:
-- `config/tls-cert.pem` e `config/tls-key.pem` (certificato TLS self-signed per il proxy)
-- `config/fleet-key.pem` (copia di `private-key.pem`, usata dal proxy per firmare i comandi)
-
-## 3. Crea il file dei token (se non esiste)
-
-Il file deve esistere prima del primo `docker-compose up`, altrimenti Docker crea una cartella al posto del file:
-
-```bash
 touch tesla-tokens.json
 ```
 
-## 4. Build e avvio di entrambi i servizi
+`setup-proxy.sh` crea:
 
-Alla primissima esecuzione serve `--build` per costruire l'immagine `tesla-cli`:
+- `config/tls-cert.pem`
+- `config/tls-key.pem`
+- `config/fleet-key.pem`
 
-```bash
-docker-compose up --build -d
-```
-
-Cosa succede:
-- `tesla-proxy` parte, espone `4443` e usa `config/tls-cert.pem`, `config/tls-key.pem`, `config/fleet-key.pem`.
-- `tesla-cli` aspetta che `tesla-proxy` sia **healthy**, poi parte condividendo il network namespace del proxy (`network_mode: service:tesla-proxy`): questo permette al codice Go, che chiama `https://localhost:4443` in modo fisso, di raggiungere il proxy senza modifiche.
-- `.env` e `tesla-tokens.json` sono montati come volumi in `/app` dentro `tesla-cli`.
-
-Per gli avvii successivi (nessuna modifica al codice), **non serve** `--build`: Docker Compose riusa l'immagine già costruita.
+## 4. Avvio completo
 
 ```bash
-docker-compose up -d
+docker compose up --build -d
 ```
 
-Usa `--build` di nuovo solo dopo aver modificato [tesla-cli.go](tesla-cli.go) o il [Dockerfile](Dockerfile):
+Controlla lo stato:
 
 ```bash
-docker-compose up --build -d
+docker compose ps
+docker compose logs -f tesla-api
 ```
 
-## 5. Usa la CLI interattiva
+Porte esposte sull'host:
 
-Se hai avviato in background, attacca il terminale al container `tesla-cli`:
+| Servizio | URL |
+|---|---|
+| Tesla API Go | `http://localhost:8000` |
+| Callback OAuth | `http://localhost:8080/callback` |
+| Tesla proxy | `https://localhost:4443` |
+| Node-RED | `http://localhost:1880` |
+| InfluxDB | `http://localhost:8086` |
+| Grafana | `http://localhost:3000` |
+
+## 5. Prima autenticazione OAuth
+
+Il servizio `tesla-api` parte senza bloccare l'avvio. Il flusso OAuth parte quando chiami un endpoint che richiede Tesla, per esempio:
 
 ```bash
-docker attach tesla-cli
+curl -X POST http://localhost:8000/api/vehicle/poll
 ```
 
-Vedrai il menu:
-```
-What would you like to do?
-1. Lock Doors
-2. Unlock Doors
-3. Sentry Mode ON
-4. Sentry Mode OFF
-5. Quit
-```
-
-Al primo avvio, se non trova token validi in `tesla-tokens.json`, il programma apre il flusso OAuth: segui il link stampato in console dal tuo browser (sul host, non nel container), autorizza l'app, e i token verranno salvati in `tesla-tokens.json` grazie al volume condiviso.
-
-Per staccarti dal container senza fermarlo: `Ctrl+P` poi `Ctrl+Q`.
-
-## 6. Controlli utili
+Poi guarda i log:
 
 ```bash
-# Stato dei servizi
-docker-compose ps
-
-# Log del proxy
-docker-compose logs -f tesla-proxy
-
-# Log della CLI
-docker-compose logs -f tesla-cli
-
-# Health check manuale del proxy
-curl -k https://localhost:4443/health
+docker compose logs -f tesla-api
 ```
 
-## 7. Fermare tutto
+Apri nel browser l'URL Tesla stampato nei log. Dopo il login Tesla, il callback torna su `http://localhost:8080/callback` e il servizio salva il nuovo `tesla-tokens.json`.
+
+## 6. Chiamate principali
+
+Health check:
 
 ```bash
-docker-compose down
+curl http://localhost:8000/health
 ```
 
-I file `config/`, `.env`, `tesla-tokens.json` restano sul host: al riavvio non serve rifare il setup (a meno che i token siano scaduti).
+Polling dati e scrittura su InfluxDB:
+
+```bash
+curl -X POST http://localhost:8000/api/vehicle/poll \
+  -H "Content-Type: application/json" \
+  -d '{"endpoints":"charge_state,drive_state,climate_state,vehicle_state"}'
+```
+
+Comando generico Tesla:
+
+```bash
+curl -X POST http://localhost:8000/api/vehicle/command \
+  -H "Content-Type: application/json" \
+  -d '{"command":"door_lock","params":{},"wake":true}'
+```
+
+Da Node-RED, usa gli URL interni Docker:
+
+- `http://tesla-api:8000/api/vehicle/poll`
+- `http://tesla-api:8000/api/vehicle/latest`
+- `http://tesla-api:8000/api/vehicle/command`
+
+## 7. Grafana
+
+Apri `http://localhost:3000`.
+
+Credenziali di default:
+
+- utente: `admin`
+- password: `admin`
+
+Il datasource InfluxDB viene creato dal provisioning in `grafana/provisioning`. La dashboard iniziale si trova nella cartella Grafana `Tesla`.
+
+## 8. Spegnimento
+
+```bash
+docker compose down
+```
+
+I dati persistenti restano in:
+
+- `influxdb-data/`
+- `node-red-data/`
+- `grafana-data/`
+- `tesla-tokens.json`
+- `config/`
 
 ## Troubleshooting
 
 | Problema | Causa probabile | Soluzione |
 |---|---|---|
-| `tesla-cli` non parte, resta in attesa | `tesla-proxy` non risulta "healthy" | `docker-compose logs tesla-proxy`, verifica certificati in `config/` |
-| Errore di connessione a `localhost:4443` dentro `tesla-cli` | `network_mode: service:tesla-proxy` mancante o rimosso | Verifica che sia presente in [docker-compose.yml](docker-compose.yml) |
-| I token non vengono richiesti/salvati | `tesla-tokens.json` non montato o creato come cartella | Cancella la cartella `tesla-tokens.json` e ricrea il file con `touch tesla-tokens.json` |
-| `private-key.pem not found` durante `setup-proxy.sh` | Chiave privata mancante nella root | Copia `private-key.pem` (dal tutorial di generazione chiavi) nella root del progetto |
+| `tesla-api` non diventa healthy | proxy o InfluxDB non pronti | `docker compose logs tesla-proxy influxdb tesla-api` |
+| Il callback OAuth non arriva | redirect URI non configurata in Tesla | aggiungi `http://localhost:8080/callback` nelle impostazioni app Tesla |
+| L'app riparte e richiede sempre OAuth | `TESLA_RESET_TOKEN_ON_START=true` | comportamento voluto; imposta `false` solo se vuoi riusare i token |
+| Node-RED non raggiunge l'API | URL host usato dentro container | da Node-RED usa `http://tesla-api:8000`, non `localhost` |
+| Grafana non mostra dati | nessun polling ancora eseguito | chiama `POST /api/vehicle/poll` e poi ricarica la dashboard |
