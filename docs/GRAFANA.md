@@ -21,7 +21,7 @@ docker compose up -d
 
 ## Datasource InfluxDB
 
-Il datasource viene creato automaticamente da:
+Il datasource viene creato automaticamente da [influxdb.yml](../grafana/provisioning/datasources/influxdb.yml):
 
 ```text
 grafana/provisioning/datasources/influxdb.yml
@@ -41,7 +41,7 @@ Parametri:
 
 ## Dashboard iniziale
 
-La dashboard provisionata e:
+La dashboard provisionata e [tesla-overview.json](../grafana/dashboards/tesla-overview.json):
 
 ```text
 grafana/dashboards/tesla-overview.json

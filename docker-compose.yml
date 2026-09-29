@@ -89,11 +89,70 @@ services:
     networks:
       - tesla-network
 
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: tesla-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+    environment:
+      MQTT_USERNAME: ${MQTT_USERNAME:?Set MQTT_USERNAME in .env}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?Set MQTT_PASSWORD in .env}
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        mosquitto_passwd -b -c /mosquitto/data/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD" &&
+        exec mosquitto -c /mosquitto/config/mosquitto.conf
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mosquitto_pub -h 127.0.0.1 -t healthcheck -m ok -u "$$MQTT_USERNAME" -P "$$MQTT_PASSWORD"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - tesla-network
+
+  mysql:
+    image: mysql:8.4
+    container_name: tesla-mysql
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: tesla
+      MYSQL_USER: ${MYSQL_USER:-tesla_nodered}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -u"$${MYSQL_USER}" -p"$${MYSQL_PASSWORD}" --silent
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - tesla-network
+
   node-red:
-    image: nodered/node-red:latest
+    build: ./node-red
+    image: tesla-node-red:latest
     container_name: tesla-node-red
     depends_on:
       tesla-api:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+      mysql:
         condition: service_healthy
     ports:
       - "1880:1880"
@@ -126,3 +185,7 @@ services:
 networks:
   tesla-network:
     driver: bridge
+
+volumes:
+  mosquitto-data:
+  mysql-data:

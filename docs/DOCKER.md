@@ -19,6 +19,8 @@ Servizi nel compose:
 - `tesla-proxy`
 - `tesla-api`
 - `influxdb`
+- `mosquitto`
+- `mysql`
 - `node-red`
 - `grafana`
 
@@ -26,6 +28,8 @@ Tutti sono collegati a `tesla-network`. I container si chiamano tra loro con i n
 
 - `tesla-api` -> `https://tesla-proxy:4443`
 - `tesla-api` -> `http://influxdb:8086`
+- `node-red` -> `mosquitto:1883`
+- `node-red` -> `mysql:3306`
 - `node-red` -> `http://tesla-api:8000`
 - `grafana` -> `http://influxdb:8086`
 
@@ -50,8 +54,17 @@ Per password e token locali puoi creare variabili shell prima dell'avvio:
 export INFLUX_ADMIN_TOKEN='scegli-un-token-lungo'
 export INFLUX_ADMIN_PASSWORD='scegli-una-password'
 export GRAFANA_ADMIN_PASSWORD='scegli-una-password'
+export MQTT_USERNAME='tesla_nodered'
+export MQTT_PASSWORD='scegli-una-password-lunga'
+export MYSQL_ROOT_PASSWORD='scegli-un-altra-password-lunga'
+export MYSQL_USER='tesla_nodered'
+export MYSQL_PASSWORD='scegli-una-password-lunga'
 docker compose up --build -d
 ```
+
+In alternativa, aggiungi queste variabili al tuo `.env` esistente, mantenendo le credenziali Tesla già presenti. L'immagine Node-RED installa `node-red-node-mysql` versione `3.0.4`. I volumi Docker `mosquitto-data` e `mysql-data` conservano rispettivamente messaggi e database.
+
+Le porte host MQTT `1883` e MySQL `3306` sono pubblicate su tutte le interfacce per l'accesso dalla LAN. MySQL e MQTT richiedono autenticazione; cambia ogni password di esempio e limita gli accessi con il firewall. MQTT senza TLS trasmette credenziali e messaggi in chiaro, quindi non esporre la porta a reti non fidate o a Internet.
 
 ## Token Tesla al riavvio
 
@@ -103,6 +116,7 @@ docker push ghcr.io/<utente>/tesla-fleet-api-service:latest
 docker compose ps
 docker compose logs -f tesla-api
 docker compose logs -f tesla-proxy
+docker compose logs -f mosquitto mysql node-red
 curl http://localhost:8000/health
 curl -k https://localhost:4443/health
 ```

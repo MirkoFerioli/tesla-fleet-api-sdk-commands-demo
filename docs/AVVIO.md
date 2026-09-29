@@ -83,6 +83,8 @@ Porte esposte sull'host:
 | Node-RED | `http://localhost:1880` |
 | InfluxDB | `http://localhost:8086` |
 | Grafana | `http://localhost:3000` |
+| Mosquitto MQTT | `mqtt://localhost:1883` |
+| MySQL | `localhost:3306` |
 
 ## 5. Prima autenticazione OAuth
 

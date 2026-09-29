@@ -2,6 +2,27 @@
 
 Node-RED deve orchestrare automazioni chiamando `tesla-api`. Non deve scrivere su InfluxDB e non deve contenere token Tesla.
 
+Lo stack include anche Mosquitto e MySQL. Il [flow importabile](../node-red/flows/tesla-mqtt-to-mysql.json) salva i messaggi JSON ricevuti sui topic `tesla/#` nella tabella `tesla.mqtt_messages`.
+
+### Importazione flow MQTT → MySQL
+
+1. Avvia lo stack dopo aver impostato le credenziali MQTT e MySQL nel file `.env`.
+2. Apri `http://localhost:1880` e importa il file [tesla-mqtt-to-mysql.json](../node-red/flows/tesla-mqtt-to-mysql.json) dal menu Import.
+3. Apri la configurazione del broker Mosquitto e inserisci `MQTT_USERNAME` e `MQTT_PASSWORD`.
+4. Apri la configurazione MySQL e inserisci `MYSQL_USER` e `MYSQL_PASSWORD`. Host, porta e database sono già impostati su `mysql:3306` e `tesla`.
+5. Distribuisci il flow. Ogni messaggio JSON su `tesla/#` viene aggiunto a `mqtt_messages`; il database assegna l'ora UTC di ricezione.
+
+La palette `node-red-node-mysql` è installata nell'immagine Node-RED ed è fissata alla versione `3.0.4`. Le credenziali non sono incluse nel flow esportato.
+
+### Endpoint interni
+
+| Servizio | Endpoint dai container | Porta host |
+|---|---|---|
+| Mosquitto MQTT | `mosquitto:1883` | `1883` |
+| MySQL | `mysql:3306` | `3306` |
+
+Le porte host sono pubblicate su tutte le interfacce per consentire connessioni dalla LAN. MQTT su porta `1883` non cifra il traffico: usa credenziali robuste e limita l'accesso con il firewall a una rete fidata. Non esporre questi servizi direttamente a Internet.
+
 URL interno da usare nei nodi HTTP Request:
 
 ```text
