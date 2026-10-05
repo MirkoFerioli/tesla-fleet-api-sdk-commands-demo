@@ -2,7 +2,10 @@ version: '3.8'
 
 services:
   tesla-proxy:
-    image: tesla/vehicle-command:latest
+    build:
+      context: .
+      dockerfile: proxy/Dockerfile
+    image: tesla-fleet-http-proxy:latest
     container_name: tesla-http-proxy
     ports:
       - "4443:4443"
@@ -22,7 +25,7 @@ services:
       -host 0.0.0.0
       -port 4443
     healthcheck:
-      test: ["CMD", "curl", "-f", "--cacert", "/config/tls-cert.pem", "https://localhost:4443/health"]
+      test: ["CMD", "proxy-healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -44,8 +47,17 @@ services:
       - "8000:8000"
       - "8080:8080"  # callback OAuth Tesla configurato in TESLA_REDIRECT_URI
     volumes:
-      - ./.env:/app/.env:ro
-      - ./tesla-tokens.json:/app/tesla-tokens.json
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./tesla-tokens.json
+        target: /app/tesla-tokens.json
+        bind:
+          create_host_path: false
     environment:
       - TESLA_API_LISTEN_ADDR=:8000
       - TESLA_PROXY_URL=https://tesla-proxy:4443

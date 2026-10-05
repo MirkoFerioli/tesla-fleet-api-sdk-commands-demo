@@ -211,10 +211,7 @@ func resetTokenFile(path string) error {
 		return nil
 	}
 	if stat, err := os.Stat(path); err == nil && stat.IsDir() {
-		return os.RemoveAll(path)
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
+		return fmt.Errorf("%s is a directory; create the host token file before starting Docker Compose", path)
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {

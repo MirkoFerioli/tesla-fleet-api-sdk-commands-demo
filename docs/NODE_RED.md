@@ -14,6 +14,10 @@ Lo stack include anche Mosquitto e MySQL. Il [flow importabile](../node-red/flow
 
 La palette `node-red-node-mysql` è installata nell'immagine Node-RED ed è fissata alla versione `3.0.4`. Le credenziali non sono incluse nel flow esportato.
 
+Il flow non viene importato automaticamente e lo stack non pubblica dati Tesla su MQTT: devi collegare un publisher o un'automazione MQTT. La funzione del flow serializza `msg.payload` con `JSON.stringify`; se ricevi JSON come stringa e vuoi salvarlo come oggetto, inserisci un nodo JSON prima della funzione di insert. Un JSON pubblicato come oggetto viene salvato come oggetto, una stringa come stringa JSON.
+
+La tabella viene creata dagli script `mysql/init` solo alla prima inizializzazione del volume MySQL. Se riusi un database gia esistente senza `mqtt_messages`, applica lo script SQL anche a quel database. Le credenziali inserite nei nodi devono corrispondere agli utenti effettivamente presenti, non solo ai nuovi valori di `.env`.
+
 ### Endpoint interni
 
 | Servizio | Endpoint dai container | Porta host |
@@ -85,7 +89,7 @@ Payload consigliato:
 }
 ```
 
-Non usare polling troppo frequente: puo svegliare spesso il veicolo e consumare batteria.
+Non usare polling troppo frequente: aumenta le richieste Fleet API e puo comportare costi e limiti di utilizzo. Il servizio non esegue un risveglio esplicito per il polling; le richieste possono fallire se il veicolo dorme. Evita di aggiungere un risveglio automatico a ogni polling se non necessario, per limitare il consumo di batteria.
 
 ## Flow comando generico
 
@@ -164,3 +168,5 @@ docker compose exec node-red wget -qO- http://tesla-api:8000/health
 ```
 
 Se questo funziona, i nodi HTTP Request possono raggiungere la nuova API.
+
+Controlla anche `proxy` e `influxdb` nel JSON: la sola risposta HTTP 200 verifica la raggiungibilita dell'API, non la salute delle dipendenze. La prima richiesta Tesla puo richiedere OAuth: autorizza manualmente dai log prima di attivare le automazioni periodiche.

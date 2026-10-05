@@ -70,9 +70,15 @@ fi
 echo ""
 
 # Check if tokens file exists
-if [ ! -f tesla-tokens.json ]; then
-    echo "⚠️  tesla-tokens.json not found. It will be created when you authenticate."
-    echo ""
+if [[ -d tesla-tokens.json ]]; then
+    echo "❌ tesla-tokens.json is a directory, but Docker needs a file."
+    echo "Move the directory aside, then run this script again."
+    exit 1
+fi
+if [[ ! -f tesla-tokens.json ]]; then
+    touch tesla-tokens.json
+    chmod 600 tesla-tokens.json
+    echo "✅ Empty tesla-tokens.json created for the Docker bind mount"
 fi
 
 echo "📋 Configuration Summary:"
@@ -89,7 +95,7 @@ echo ""
 echo "✅ Setup complete!"
 echo ""
 echo "To start the proxy, run:"
-echo "  docker-compose up -d"
+echo "  docker compose up --build -d"
 echo ""
 echo "To view logs:"
 echo "  docker-compose logs -f tesla-proxy"
