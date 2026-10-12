@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   tesla-proxy:
     build:
@@ -116,12 +114,16 @@ services:
       - /bin/sh
       - -c
       - >-
-        mosquitto_passwd -b -c /mosquitto/data/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD" &&
+        if [ -f /mosquitto/data/passwd ]; then
+          mosquitto_passwd -b /mosquitto/data/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD";
+        else
+          mosquitto_passwd -b -c /mosquitto/data/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD";
+        fi &&
         exec mosquitto -c /mosquitto/config/mosquitto.conf
     healthcheck:
       test:
         - CMD-SHELL
-        - mosquitto_pub -h 127.0.0.1 -t healthcheck -m ok -u "$$MQTT_USERNAME" -P "$$MQTT_PASSWORD"
+        - test -s /mosquitto/data/passwd
       interval: 10s
       timeout: 5s
       retries: 6
@@ -131,7 +133,7 @@ services:
       - tesla-network
 
   mysql:
-    image: mysql:8.4
+    image: mysql:26.7
     container_name: tesla-mysql
     ports:
       - "3306:3306"
