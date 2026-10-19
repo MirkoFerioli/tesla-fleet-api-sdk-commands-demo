@@ -1,0 +1,14 @@
+{
+  "fields": {
+    "Location": { "interval_seconds": 10 },
+    "VehicleSpeed": { "interval_seconds": 10 },
+    "Gear": { "interval_seconds": 10 },
+    "Odometer": { "interval_seconds": 60 },
+    "BatteryLevel": { "interval_seconds": 60 },
+    "DetailedChargeState": { "interval_seconds": 30 },
+    "ACChargingPower": { "interval_seconds": 30 },
+    "DCChargingPower": { "interval_seconds": 30 },
+    "InsideTemp": { "interval_seconds": 60 },
+    "OutsideTemp": { "interval_seconds": 60 }
+  }
+}

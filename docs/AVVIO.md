@@ -12,6 +12,8 @@ Questa guida avvia tutto lo stack Docker:
 
 Tutti i container stanno sulla stessa rete Docker `tesla-network`. Dall'esterno usi lo stesso IP del computer e porte diverse.
 
+Il ricevitore Fleet Telemetry e opzionale e non parte con l'avvio standard. Puoi prepararlo prima di scegliere l'hosting pubblico; dominio, certificati e consenso GPS servono prima dell'attivazione sull'auto. Segui la [guida dedicata](FLEET_TELEMETRY.md), che riutilizza questa configurazione senza rigenerare chiave Fleet o credenziali.
+
 ## 1. Prerequisiti
 
 - Docker e Docker Compose.

@@ -14,6 +14,12 @@ Base URL dagli altri container nella stessa rete Docker:
 http://tesla-api:8000
 ```
 
+## Fleet Telemetry
+
+Con `TESLA_TELEMETRY_ENABLED=true` sono disponibili `GET`, `POST` e `DELETE /api/vehicle/telemetry/config`. POST applica al VIN configurato i campi del profilo locale (body vuoto) oppure un body `{"fields":{"BatteryLevel":{"interval_seconds":60}}}`. Hostname, porta e CA vengono dalla configurazione locale; il proxy esistente firma la richiesta. GET legge configurazione/sincronizzazione, DELETE la rimuove senza risveglio esplicito. Stato HTTP e body Tesla vengono conservati, inclusi errori o risultati parziali con HTTP 200: controlla `synced` e i veicoli saltati.
+
+Il GPS richiede `vehicle_location` e nuovo consenso. La funzionalita disabilitata risponde `503`; input non valido `400`; TLS/profilo mancanti `503`; errori di trasporto `502`. POST non chiama OAuth se la configurazione locale e incompleta. Questi endpoint non scrivono su InfluxDB e non leggono lo stream MQTT. Vedi [configurazione e utilizzo](FLEET_TELEMETRY.md).
+
 ## Differenza tra data, poll e latest
 
 | Endpoint | Chiama Tesla | Scrive su InfluxDB | Uso principale |

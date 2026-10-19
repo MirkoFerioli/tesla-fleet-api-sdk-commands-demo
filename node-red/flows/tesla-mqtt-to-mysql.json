@@ -4,7 +4,7 @@
     "type": "tab",
     "label": "Tesla MQTT to MySQL",
     "disabled": false,
-    "info": "Stores JSON MQTT messages from tesla/# in the MySQL mqtt_messages table."
+    "info": "Stores Fleet Telemetry and other MQTT messages from tesla/# in the MySQL mqtt_messages table. Receipt timestamps are assigned by MySQL; QoS 1 may produce duplicates."
   },
   {
     "id": "tesla-mqtt-input",
@@ -12,8 +12,8 @@
     "z": "tesla-mqtt-mysql-flow",
     "name": "Subscribe tesla/#",
     "topic": "tesla/#",
-    "qos": "0",
-    "datatype": "auto",
+    "qos": "1",
+    "datatype": "buffer",
     "broker": "tesla-mosquitto-config",
     "nl": false,
     "rap": true,
@@ -28,7 +28,7 @@
     "type": "function",
     "z": "tesla-mqtt-mysql-flow",
     "name": "Prepare parameterized insert",
-    "func": "const mqttTopic = msg.topic;\nconst jsonPayload = JSON.stringify(msg.payload ?? null);\nmsg.topic = \"INSERT INTO mqtt_messages (topic, payload) VALUES (?, ?)\";\nmsg.payload = [mqttTopic, jsonPayload];\nreturn msg;",
+    "func": "const mqttTopic = msg.topic;\nlet value = Buffer.isBuffer(msg.payload) ? msg.payload.toString(\"utf8\") : msg.payload;\nif (typeof value === \"string\") {\n    try {\n        value = JSON.parse(value);\n    } catch {}\n}\nconst jsonPayload = JSON.stringify(value ?? null);\nmsg.topic = \"INSERT INTO mqtt_messages (topic, payload) VALUES (?, ?)\";\nmsg.payload = [mqttTopic, jsonPayload];\nreturn msg;",
     "outputs": 1,
     "timeout": 0,
     "noerr": 0,

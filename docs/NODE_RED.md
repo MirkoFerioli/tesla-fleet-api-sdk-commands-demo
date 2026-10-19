@@ -14,7 +14,9 @@ Lo stack include anche Mosquitto e MySQL. Il [flow importabile](../node-red/flow
 
 La palette `node-red-node-mysql` è installata nell'immagine Node-RED ed è fissata alla versione `3.0.4`. Le credenziali non sono incluse nel flow esportato.
 
-Il flow non viene importato automaticamente e lo stack non pubblica dati Tesla su MQTT: devi collegare un publisher o un'automazione MQTT. La funzione del flow serializza `msg.payload` con `JSON.stringify`; se ricevi JSON come stringa e vuoi salvarlo come oggetto, inserisci un nodo JSON prima della funzione di insert. Un JSON pubblicato come oggetto viene salvato come oggetto, una stringa come stringa JSON.
+Il flow non viene importato automaticamente. Con il profilo [Fleet Telemetry](FLEET_TELEMETRY.md) attivo, il ricevitore ufficiale pubblica i segnali Tesla sotto `tesla/<VIN>/...`; altrimenti serve un publisher o un'automazione MQTT. La sottoscrizione usa QoS 1 e payload buffer: la funzione decodifica il JSON una sola volta e lo serializza per l'insert parametrizzato. Conserva numeri, stringhe numeriche, booleani, oggetti e `null`; i messaggi non JSON restano stringhe. Non aggiungere un nodo JSON prima della funzione, per evitare una seconda decodifica. Il VIN e nel topic, non necessariamente nel payload.
+
+Se aggiorni un'installazione precedente, sostituisci il flow esistente invece di attivare una seconda copia. Le credenziali restano nelle configurazioni dei nodi e vanno verificate prima di Deploy. QoS 1 puo produrre duplicati e non garantisce un commit MySQL: il flow non implementa una coda offline o deduplicazione.
 
 La tabella viene creata dagli script `mysql/init` solo alla prima inizializzazione del volume MySQL. Se riusi un database gia esistente senza `mqtt_messages`, applica lo script SQL anche a quel database. Le credenziali inserite nei nodi devono corrispondere agli utenti effettivamente presenti, non solo ai nuovi valori di `.env`.
 

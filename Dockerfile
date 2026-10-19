@@ -17,6 +17,7 @@ RUN apk --no-cache add ca-certificates
 WORKDIR /app
 
 COPY --from=builder /src/tesla-api .
+COPY telemetry/vehicle-fields.json ./telemetry/vehicle-fields.json
 
 EXPOSE 8000 8080
 

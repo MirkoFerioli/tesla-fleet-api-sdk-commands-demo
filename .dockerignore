@@ -3,5 +3,13 @@
 .gitignore
 .vscode
 .env
+config/
+tesla-tokens.json
+*.pem
+*.key
+*.crt
+influxdb-data/
+node-red-data/
+grafana-data/
 *.md
 helm

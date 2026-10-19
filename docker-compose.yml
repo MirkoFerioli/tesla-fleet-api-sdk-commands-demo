@@ -1,4 +1,29 @@
 services:
+  fleet-telemetry:
+    image: docker.io/tesla/fleet-telemetry:v0.9.5
+    profiles: [telemetry]
+    user: "${TELEMETRY_UID:-1000}:${TELEMETRY_GID:-1000}"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    ports:
+      - "${TESLA_TELEMETRY_PORT:-443}:8443"
+    volumes:
+      - type: bind
+        source: ${TESLA_TELEMETRY_DIR:-./config/telemetry}
+        target: /etc/fleet-telemetry
+        read_only: true
+        bind:
+          create_host_path: false
+    command: ["/fleet-telemetry", "-config", "/etc/fleet-telemetry/server-config.json"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    networks:
+      - tesla-network
+
   tesla-proxy:
     build:
       context: .
@@ -46,6 +71,11 @@ services:
       - "8080:8080"  # callback OAuth Tesla configurato in TESLA_REDIRECT_URI
     volumes:
       - type: bind
+        source: ${TESLA_TELEMETRY_DIR:-./config/telemetry}
+        target: /app/config/telemetry
+        read_only: true
+      - ./telemetry:/app/telemetry:ro
+      - type: bind
         source: ./.env
         target: /app/.env
         read_only: true
@@ -60,6 +90,8 @@ services:
       - TESLA_API_LISTEN_ADDR=:8000
       - TESLA_PROXY_URL=https://tesla-proxy:4443
       - TESLA_TOKEN_PATH=/app/tesla-tokens.json
+      - TESLA_TELEMETRY_DIR=config/telemetry
+      - TESLA_TELEMETRY_FIELDS=telemetry/vehicle-fields.json
       - TESLA_RESET_TOKEN_ON_START=true
       - INFLUX_URL=http://influxdb:8086
       - INFLUX_ORG=tesla

@@ -36,6 +36,8 @@ type Config struct {
 	InfluxOrg         string
 	InfluxBucket      string
 	TeslaTimeout      time.Duration
+	OAuthScopes       string
+	Telemetry         TelemetryConfig
 }
 
 type TeslaTokens struct {
@@ -84,6 +86,12 @@ type PollRequest struct {
 
 func main() {
 	config := loadConfig()
+	if len(os.Args) > 1 {
+		if err := runTelemetryCLI(config, os.Args[1:], os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	if config.ResetTokenOnStart {
 		if err := resetTokenFile(config.TokenPath); err != nil {
@@ -132,6 +140,9 @@ func (app *App) routes() http.Handler {
 	mux.HandleFunc("GET /api/vehicle/data", app.handleVehicleData)
 	mux.HandleFunc("POST /api/vehicle/poll", app.handlePoll)
 	mux.HandleFunc("POST /api/vehicle/command", app.handleCommand)
+	mux.HandleFunc("GET /api/vehicle/telemetry/config", app.handleTelemetryConfig)
+	mux.HandleFunc("POST /api/vehicle/telemetry/config", app.handleTelemetryConfig)
+	mux.HandleFunc("DELETE /api/vehicle/telemetry/config", app.handleTelemetryConfig)
 	return requestLogger(mux)
 }
 
@@ -159,6 +170,8 @@ func loadConfig() Config {
 		InfluxOrg:         envValue(envFile, "INFLUX_ORG", ""),
 		InfluxBucket:      envValue(envFile, "INFLUX_BUCKET", ""),
 		TeslaTimeout:      30 * time.Second,
+		OAuthScopes:       envValue(envFile, "TESLA_OAUTH_SCOPES", defaultOAuthScopes),
+		Telemetry:         loadTelemetryConfig(envFile),
 	}
 }
 
@@ -424,7 +437,11 @@ func authenticateAndGetTokens(config Config) (TeslaTokens, error) {
 	params.Add("client_id", config.ClientID)
 	params.Add("redirect_uri", config.RedirectURI)
 	params.Add("response_type", "code")
-	params.Add("scope", "openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds")
+	scopes := config.OAuthScopes
+	if scopes == "" {
+		scopes = defaultOAuthScopes
+	}
+	params.Add("scope", scopes)
 	params.Add("state", fmt.Sprintf("%d", time.Now().Unix()))
 	authURL := "https://auth.tesla.com/oauth2/v3/authorize?" + params.Encode()
 

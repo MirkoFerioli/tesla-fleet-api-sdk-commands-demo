@@ -4,6 +4,8 @@ Stack locale per automazioni Tesla con Go, Tesla Vehicle Command proxy, InfluxDB
 
 Il servizio Go `tesla-api` e il punto di integrazione principale: gestisce OAuth Tesla, chiama il proxy Tesla, espone endpoint HTTP per Node-RED e scrive direttamente su InfluxDB.
 
+Fleet Telemetry e disponibile come integrazione opzionale: l'auto invia dati al ricevitore mTLS ufficiale, che li pubblica su Mosquitto; il flow Node-RED esistente li salva su MySQL. Riutilizza OAuth e chiave virtuale gia configurati. Vedi la [guida Fleet Telemetry](docs/FLEET_TELEMETRY.md) per preparazione locale, dominio/certificati, consenso GPS e attivazione esplicita. Non si attiva con l'avvio standard dello stack.
+
 ## Servizi
 
 Docker Compose avvia l'API Tesla, il proxy, InfluxDB, Mosquitto, MySQL, Node-RED e Grafana sulla rete `tesla-network`.
