@@ -10,7 +10,7 @@ docker build -t tesla-fleet-api-service:latest .
 
 ## Avvio stack completo
 
-Il profilo opzionale `telemetry` aggiunge il ricevitore ufficiale `docker.io/tesla/fleet-telemetry:v0.9.5`, nonroot, con mTLS sulla porta interna `8443`. Non viene attivato dai comandi standard sotto. Dopo aver preparato file/certificati e permessi puoi avviarlo con `docker compose --profile telemetry up -d fleet-telemetry`. Riutilizza Mosquitto sulla rete esistente e non dipende dall'API. Vedi [Fleet Telemetry](FLEET_TELEMETRY.md) per bind mount, UID/GID, Podman, porta pubblica e verifiche esterne. L'API monta anche la directory telemetry e il profilo segnali in sola lettura.
+Il profilo opzionale `telemetry` aggiunge il ricevitore ufficiale `docker.io/tesla/fleet-telemetry:v0.9.5`, nonroot, con mTLS sulla porta interna `8443`. Non viene attivato dai comandi standard sotto e il Compose principale non pubblica la porta telemetry. Per Tailscale e rinnovo nei container usa `bash setup-telemetry.sh setup` e la [guida VPN](FLEET_TELEMETRY_VPN_LETSENCRYPT.md). Per l'ingresso diretto, dopo aver preparato file e permessi, usa `docker compose -f docker-compose.yml -f docker-compose.telemetry-public.yml --profile telemetry up -d fleet-telemetry`. Non combinare gli override pubblico e Tailscale. Riutilizza Mosquitto sulla rete esistente e non dipende dall'API. Vedi [Fleet Telemetry](FLEET_TELEMETRY.md) per UID/GID, Podman e verifiche esterne. L'API monta directory telemetry e profilo segnali in sola lettura.
 
 ```bash
 docker compose up --build -d

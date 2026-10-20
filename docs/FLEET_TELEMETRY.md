@@ -9,6 +9,25 @@ Dati:          auto -> Fleet Telemetry (mTLS) -> Mosquitto -> Node-RED -> MySQL
 
 OAuth, VIN, chiave virtuale e credenziali MQTT vengono riutilizzati. Non vengono create nuove chiavi Fleet o copie dei token. Il polling e i comandi restano invariati; questi dati telemetry non vengono scritti su InfluxDB/Grafana e non aggiornano `/api/vehicle/latest`.
 
+## Scegli il Deployment
+
+Per il pacchetto ridistribuibile con Tailscale e rinnovo certificati nei container,
+usa `bash setup-telemetry.sh setup` e la [guida VPN e Let's Encrypt](FLEET_TELEMETRY_VPN_LETSENCRYPT.md).
+Non serve cert-manager, che richiederebbe Kubernetes. Non combinare l'override
+Tailscale con quello pubblico.
+
+I passi seguenti descrivono invece il ricevitore con certificati gestiti da te.
+Il Compose principale non pubblica piu la sua porta: per l'ingresso diretto,
+prima dei comandi seguenti, seleziona esplicitamente l'override pubblico:
+
+```bash
+export COMPOSE_FILE=docker-compose.yml:docker-compose.telemetry-public.yml
+```
+
+Per un ricevitore Tailscale gia configurato, usa invece
+`export COMPOSE_FILE=docker-compose.yml:docker-compose.tailscale.yml` prima di
+eseguire gli altri comandi Compose di questa guida. Il setup non configura l'auto.
+
 ## Prerequisiti
 
 - App Fleet API gia registrata nella regione corretta, chiave pubblica pubblicata sul dominio applicativo e chiave virtuale associata all'auto. Non ripetere questi passaggi se gia completati.

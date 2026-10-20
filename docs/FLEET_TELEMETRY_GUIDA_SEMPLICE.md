@@ -4,6 +4,19 @@ Questa guida ti accompagna nell'attivazione di Fleet Telemetry sul progetto gia 
 
 **Importante:** la parte che riguarda Internet e i certificati richiede attenzione. Se non hai esperienza con queste impostazioni, falla preparare da una persona tecnica. Non basta accendere il programma sul computer perche l'auto possa raggiungerlo.
 
+Per tenere anche Tailscale e il rinnovo dei certificati nei container, segui prima
+la [guida del pacchetto VPN](FLEET_TELEMETRY_VPN_LETSENCRYPT.md), che sostituisce
+i passi di rete e certificati qui sotto. Poi riprendi dal passo 7. Prima di usare
+i comandi Compose imposta, dalla root del progetto:
+
+```bash
+export COMPOSE_FILE=docker-compose.yml:docker-compose.tailscale.yml
+```
+
+Se invece segui questa guida con ingresso pubblico diretto e certificati gestiti
+da te, imposta `COMPOSE_FILE=docker-compose.yml:docker-compose.telemetry-public.yml`
+con `export` prima dei comandi Docker. Non combinare le due varianti.
+
 ## Cosa otterrai
 
 L'auto potra inviare automaticamente informazioni come batteria, ricarica, temperature, velocita e posizione. Il progetto le ricevera e le salvera nel suo archivio MySQL tramite Node-RED, la pagina delle automazioni.

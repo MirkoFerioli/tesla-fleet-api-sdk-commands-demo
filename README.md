@@ -6,6 +6,15 @@ Il servizio Go `tesla-api` e il punto di integrazione principale: gestisce OAuth
 
 Fleet Telemetry e disponibile come integrazione opzionale: l'auto invia dati al ricevitore mTLS ufficiale, che li pubblica su Mosquitto; il flow Node-RED esistente li salva su MySQL. Riutilizza OAuth e chiave virtuale gia configurati. Vedi la [guida Fleet Telemetry](docs/FLEET_TELEMETRY.md) per preparazione locale, dominio/certificati, consenso GPS e attivazione esplicita. Non si attiva con l'avvio standard dello stack.
 
+Per il pacchetto ridistribuibile con Tailscale Funnel e rinnovo Let's Encrypt
+nei container, esegui `bash setup-telemetry.sh setup` seguendo la
+[guida VPN e certificati](docs/FLEET_TELEMETRY_VPN_LETSENCRYPT.md).
+Non servono Tailscale sull'host, timer o Kubernetes/cert-manager. Ogni destinatario
+deve autorizzare il proprio nodo. Il setup non attiva l'auto. La porta telemetry
+diretta ora richiede l'override esplicito
+[docker-compose.telemetry-public.yml](docker-compose.telemetry-public.yml),
+alternativo all'override Tailscale.
+
 ## Servizi
 
 Docker Compose avvia l'API Tesla, il proxy, InfluxDB, Mosquitto, MySQL, Node-RED e Grafana sulla rete `tesla-network`.

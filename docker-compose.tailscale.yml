@@ -1,0 +1,127 @@
+services:
+  tailscale:
+    image: docker.io/tailscale/tailscale:v1.104.1
+    profiles: [telemetry]
+    user: "0:0"
+    userns_mode: "${TELEMETRY_USERNS_MODE:-}"
+    environment:
+      TS_USERSPACE: "true"
+      TS_AUTH_ONCE: "true"
+      TS_ACCEPT_DNS: "false"
+      TS_HOSTNAME: "${TAILSCALE_HOSTNAME:-tesla-telemetry}"
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      TS_SERVE_CONFIG: /etc/tailscale/funnel.json
+      TS_BOOT_TIMEOUT: 10m
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - tailscale-socket:/var/run/tailscale
+      - type: bind
+        source: ${TESLA_TELEMETRY_DIR:-./config/telemetry}/tailscale
+        target: /etc/tailscale
+        read_only: true
+        bind:
+          create_host_path: false
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    networks: [tesla-network]
+
+  telemetry-certificates:
+    build:
+      context: .
+      dockerfile: telemetry/Dockerfile
+      target: worker
+    image: tesla-telemetry-certificates:local
+    profiles: [telemetry]
+    user: "0:0"
+    userns_mode: "${TELEMETRY_USERNS_MODE:-}"
+    environment:
+      TELEMETRY_UID: "${TELEMETRY_UID:-1000}"
+      TELEMETRY_GID: "${TELEMETRY_GID:-1000}"
+    depends_on:
+      tailscale:
+        condition: service_started
+    volumes:
+      - tailscale-socket:/var/run/tailscale:ro
+      - type: bind
+        source: ${TESLA_TELEMETRY_DIR:-./config/telemetry}/certificates
+        target: /certificates
+        bind:
+          create_host_path: false
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, /telemetry-runtime, health]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
+    restart: unless-stopped
+    networks: [tesla-network]
+
+  fleet-telemetry:
+    build:
+      context: .
+      dockerfile: telemetry/Dockerfile
+      target: receiver
+    image: tesla-telemetry-supervised:local
+    userns_mode: "${TELEMETRY_USERNS_MODE:-}"
+    entrypoint: [/telemetry-runtime]
+    command: [receive]
+    environment:
+      CERT_DIRECTORY: /etc/fleet-telemetry/certificates
+    depends_on:
+      telemetry-certificates:
+        condition: service_healthy
+    stop_grace_period: 20s
+
+  tesla-api:
+    userns_mode: "${TELEMETRY_USERNS_MODE:-}"
+
+  telemetry-setup:
+    build:
+      context: .
+      dockerfile: telemetry/Dockerfile
+      target: worker
+    image: tesla-telemetry-certificates:local
+    profiles: [telemetry-setup]
+    user: "${TELEMETRY_UID:-1000}:${TELEMETRY_GID:-1000}"
+    userns_mode: "${TELEMETRY_USERNS_MODE:-}"
+    network_mode: none
+    environment:
+      TELEMETRY_USERNS_MODE: "${TELEMETRY_USERNS_MODE:-}"
+    volumes:
+      - ${TELEMETRY_SETUP_ROOT:-.}:/workspace
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: [configure]
+
+  telemetry-prepare:
+    build: .
+    image: tesla-fleet-api-service:latest
+    profiles: [telemetry-setup]
+    user: "${TELEMETRY_UID:-1000}:${TELEMETRY_GID:-1000}"
+    userns_mode: "${TELEMETRY_USERNS_MODE:-}"
+    network_mode: none
+    environment:
+      TESLA_TELEMETRY_DIR: /app/config/telemetry
+      MQTT_USERNAME: ${MQTT_USERNAME:?Set MQTT_USERNAME in .env}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?Set MQTT_PASSWORD in .env}
+    volumes:
+      - type: bind
+        source: ${TESLA_TELEMETRY_DIR:-./config/telemetry}
+        target: /app/config/telemetry
+        bind:
+          create_host_path: false
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: [./tesla-api, --prepare-telemetry]
+
+volumes:
+  tailscale-state:
+  tailscale-socket:

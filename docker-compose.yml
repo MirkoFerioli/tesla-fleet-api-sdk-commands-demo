@@ -6,8 +6,6 @@ services:
     depends_on:
       mosquitto:
         condition: service_healthy
-    ports:
-      - "${TESLA_TELEMETRY_PORT:-443}:8443"
     volumes:
       - type: bind
         source: ${TESLA_TELEMETRY_DIR:-./config/telemetry}
