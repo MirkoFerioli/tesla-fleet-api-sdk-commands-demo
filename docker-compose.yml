@@ -109,7 +109,7 @@ services:
     image: influxdb:2
     container_name: tesla-influxdb
     ports:
-      - "8086:8086"
+      - "18086:8086"
     volumes:
       - ./influxdb-data:/var/lib/influxdb2
     environment:
@@ -133,7 +133,7 @@ services:
     image: eclipse-mosquitto:2
     container_name: tesla-mosquitto
     ports:
-      - "1883:1883"
+      - "11883:1883"
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto-data:/mosquitto/data
@@ -166,7 +166,7 @@ services:
     image: mysql:26.7
     container_name: tesla-mysql
     ports:
-      - "3306:3306"
+      - "13306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
       - ./mysql/init:/docker-entrypoint-initdb.d:ro
@@ -199,7 +199,7 @@ services:
       mysql:
         condition: service_healthy
     ports:
-      - "1880:1880"
+      - "11880:1880"
     volumes:
       - ./node-red-data:/data
     restart: unless-stopped
@@ -213,7 +213,7 @@ services:
       influxdb:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      - "13000:3000"
     volumes:
       - ./grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro

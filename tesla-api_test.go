@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -18,10 +19,228 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestVehicleWakeRoutes(t *testing.T) {
+	const vin = "5YJ3E1EA1KF123456"
+	vehiclePath := "/api/1/vehicles/" + vin
+	for _, initialState := range []string{"asleep", "online"} {
+		for _, test := range []struct {
+			name, method, path, body, operation string
+			emptyCache                          bool
+		}{
+			{name: "data", method: "GET", path: "/api/vehicle/data?endpoints=charge_state", operation: "GET " + vehiclePath + "/vehicle_data"},
+			{name: "poll", method: "POST", path: "/api/vehicle/poll", body: `{"endpoints":"charge_state"}`, operation: "GET " + vehiclePath + "/vehicle_data"},
+			{name: "command", method: "POST", path: "/api/vehicle/command", body: `{"command":"door_lock"}`, operation: "POST " + vehiclePath + "/command/door_lock"},
+			{name: "command-wake-false", method: "POST", path: "/api/vehicle/command", body: `{"command":"door_lock","wake":false}`, operation: "POST " + vehiclePath + "/command/door_lock"},
+			{name: "latest", method: "GET", path: "/api/vehicle/latest"},
+			{name: "latest-empty", method: "GET", path: "/api/vehicle/latest", emptyCache: true},
+			{name: "telemetry-get", method: "GET", path: "/api/vehicle/telemetry/config", operation: "GET " + vehiclePath + "/fleet_telemetry_config"},
+			{name: "telemetry-post", method: "POST", path: "/api/vehicle/telemetry/config", body: `{"fields":{"BatteryLevel":{"interval_seconds":60}}}`, operation: "POST /api/1/vehicles/fleet_telemetry_config"},
+		} {
+			t.Run(initialState+"/"+test.name, func(t *testing.T) {
+				var mutex sync.Mutex
+				var calls []string
+				state := initialState
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					mutex.Lock()
+					defer mutex.Unlock()
+					call := r.Method + " " + r.URL.Path
+					calls = append(calls, call)
+					if r.Header.Get("Authorization") != "Bearer test-token" {
+						t.Error("missing existing OAuth token")
+					}
+					switch call {
+					case "GET " + vehiclePath:
+						writeJSON(w, http.StatusOK, map[string]interface{}{"response": map[string]string{"state": state}})
+					case "POST " + vehiclePath + "/wake_up":
+						state = "online"
+						_, _ = w.Write([]byte(`{"response":{"state":"online"}}`))
+					case test.operation:
+						if state != "online" {
+							http.Error(w, "vehicle is asleep", http.StatusServiceUnavailable)
+							return
+						}
+						if strings.HasSuffix(r.URL.Path, "/vehicle_data") && r.URL.Query().Get("endpoints") != "charge_state" {
+							t.Error("endpoints not preserved")
+						}
+						_, _ = w.Write([]byte(`{"response":{"charge_state":{"battery_level":80}}}`))
+					default:
+						t.Errorf("unexpected upstream call: %s", call)
+						http.Error(w, "unexpected request", http.StatusNotFound)
+					}
+				}))
+				defer upstream.Close()
+				config := Config{VehicleVIN: vin, ProxyURL: upstream.URL, TeslaTimeout: time.Second, Telemetry: TelemetryConfig{Enabled: true}}
+				if test.name == "telemetry-post" {
+					config.Telemetry = telemetryTLSFixture(t, time.Now().Add(time.Hour))
+				}
+				app := NewApp(config)
+				defer app.Close()
+				app.tokens = &TokenManager{loaded: true, tokens: TeslaTokens{AccessToken: "test-token", ExpiresAt: time.Now().Add(time.Hour).Unix()}}
+				snapshotTime := time.Now().Add(-time.Hour)
+				if !test.emptyCache {
+					app.latest = map[string]interface{}{"cached": true}
+					app.latestAt = snapshotTime
+				}
+				response := httptest.NewRecorder()
+				app.routes().ServeHTTP(response, httptest.NewRequest(test.method, test.path, strings.NewReader(test.body)))
+				wantStatus := http.StatusOK
+				if test.emptyCache {
+					wantStatus = http.StatusNotFound
+				}
+				if response.Code != wantStatus {
+					t.Errorf("status=%d want=%d body=%s", response.Code, wantStatus, response.Body.String())
+				}
+				wantCalls := []string{"GET " + vehiclePath}
+				if initialState != "online" {
+					wantCalls = append(wantCalls, "POST "+vehiclePath+"/wake_up", "GET "+vehiclePath)
+				}
+				if test.operation != "" {
+					wantCalls = append(wantCalls, test.operation)
+				}
+				mutex.Lock()
+				defer mutex.Unlock()
+				if !reflect.DeepEqual(calls, wantCalls) {
+					t.Errorf("calls=%v want=%v", calls, wantCalls)
+				}
+				if test.name == "latest" && (!bytes.Contains(response.Body.Bytes(), []byte(`"cached":true`)) || !app.latestAt.Equal(snapshotTime)) {
+					t.Error("latest must return the unchanged cached snapshot")
+				}
+				if test.name == "poll" && app.latest["charge_state"] == nil {
+					t.Error("successful poll did not update cache")
+				}
+			})
+		}
+	}
+}
+
+func TestVehicleWakeFailures(t *testing.T) {
+	for _, test := range []struct {
+		name, statusBody, wakeBody string
+		statusCode, wakeCode       int
+		cancelAfterWake            bool
+	}{
+		{name: "status-http", statusCode: 401, statusBody: `{"error":"unauthorized"}`},
+		{name: "status-error", statusCode: 200, statusBody: `{"error":"upstream failure"}`},
+		{name: "status-missing", statusCode: 200, statusBody: `{"response":{}}`},
+		{name: "status-empty", statusCode: 200, statusBody: `{"response":{"state":""}}`},
+		{name: "status-malformed", statusCode: 200, statusBody: `{`},
+		{name: "wake-http", statusCode: 200, statusBody: `{"response":{"state":"asleep"}}`, wakeCode: 503, wakeBody: `{"error":"wake failed"}`},
+		{name: "cancelled", statusCode: 200, statusBody: `{"response":{"state":"asleep"}}`, wakeCode: 200, wakeBody: `{"response":{}}`, cancelAfterWake: true},
+		{name: "deadline", statusCode: 200, statusBody: `{"response":{"state":"asleep"}}`, wakeCode: 200, wakeBody: `{"response":{}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			calls := make(chan string, 8)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls <- r.Method + " " + r.URL.Path
+				if strings.HasSuffix(r.URL.Path, "/wake_up") {
+					if test.cancelAfterWake {
+						cancel()
+					}
+					writeJSON(w, test.wakeCode, jsonRawOrString([]byte(test.wakeBody)))
+					return
+				}
+				w.WriteHeader(test.statusCode)
+				_, _ = w.Write([]byte(test.statusBody))
+			}))
+			defer upstream.Close()
+			app := NewApp(Config{VehicleVIN: "5YJ3E1EA1KF123456", ProxyURL: upstream.URL, TeslaTimeout: time.Second})
+			defer app.Close()
+			app.tokens = &TokenManager{loaded: true, tokens: TeslaTokens{AccessToken: "test-token", ExpiresAt: time.Now().Add(time.Hour).Unix()}}
+			app.latest = map[string]interface{}{"cached": true}
+			response := httptest.NewRecorder()
+			app.routes().ServeHTTP(response, httptest.NewRequest("POST", "/api/vehicle/poll", nil).WithContext(ctx))
+			if response.Code != http.StatusBadGateway || !bytes.Contains(response.Body.Bytes(), []byte(`"error"`)) {
+				t.Errorf("expected wake error, got %d %s", response.Code, response.Body.String())
+			}
+			wantCalls := 1
+			if test.wakeCode != 0 {
+				wantCalls = 2
+			}
+			if len(calls) != wantCalls {
+				t.Errorf("upstream calls=%d want=%d", len(calls), wantCalls)
+			}
+			if !reflect.DeepEqual(app.latest, map[string]interface{}{"cached": true}) {
+				t.Error("failed poll modified cache")
+			}
+		})
+	}
+}
+
+func TestVehicleWakeFailureBlocksOperations(t *testing.T) {
+	for _, test := range []struct{ method, path, body string }{
+		{"GET", "/api/vehicle/data", ""},
+		{"GET", "/api/vehicle/latest", ""},
+		{"POST", "/api/vehicle/command", `{"command":"door_lock","wake":false}`},
+		{"GET", "/api/vehicle/telemetry/config", ""},
+		{"POST", "/api/vehicle/telemetry/config", `{"fields":{"BatteryLevel":{"interval_seconds":60}}}`},
+	} {
+		t.Run(test.method+test.path, func(t *testing.T) {
+			calls := make(chan string, 8)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls <- r.Method + " " + r.URL.Path
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			}))
+			defer upstream.Close()
+			config := Config{VehicleVIN: "5YJ3E1EA1KF123456", ProxyURL: upstream.URL, TeslaTimeout: time.Second, Telemetry: TelemetryConfig{Enabled: true}}
+			if test.method == "POST" && strings.Contains(test.path, "telemetry") {
+				config.Telemetry = telemetryTLSFixture(t, time.Now().Add(time.Hour))
+			}
+			app := NewApp(config)
+			defer app.Close()
+			app.tokens = &TokenManager{loaded: true, tokens: TeslaTokens{AccessToken: "test-token", ExpiresAt: time.Now().Add(time.Hour).Unix()}}
+			response := httptest.NewRecorder()
+			app.routes().ServeHTTP(response, httptest.NewRequest(test.method, test.path, strings.NewReader(test.body)))
+			if response.Code != http.StatusBadGateway || len(calls) != 1 {
+				t.Fatalf("expected readiness error only: status=%d calls=%d body=%s", response.Code, len(calls), response.Body.String())
+			}
+			if call := <-calls; call != "GET /api/1/vehicles/5YJ3E1EA1KF123456" {
+				t.Errorf("operation was not blocked: %s", call)
+			}
+		})
+	}
+}
+
+func TestVehicleWakeValidationBeforeOAuth(t *testing.T) {
+	for _, test := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{method: "POST", path: "/api/vehicle/poll", body: `{`, status: 400},
+		{method: "POST", path: "/api/vehicle/command", body: `{`, status: 400},
+		{method: "POST", path: "/api/vehicle/command", body: `{"command":"invalid/path"}`, status: 400},
+		{method: "GET", path: "/api/vehicle/data", status: 502},
+		{method: "GET", path: "/api/vehicle/latest", status: 502},
+		{method: "POST", path: "/api/vehicle/poll", status: 502},
+		{method: "POST", path: "/api/vehicle/command", body: `{"command":"door_lock"}`, status: 502},
+	} {
+		t.Run(test.method+test.path+test.body, func(t *testing.T) {
+			app := NewApp(Config{})
+			defer app.Close()
+			app.tokens = nil
+			app.tesla = nil
+			response := httptest.NewRecorder()
+			app.routes().ServeHTTP(response, httptest.NewRequest(test.method, test.path, strings.NewReader(test.body)))
+			if response.Code != test.status {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, test.status, response.Body.String())
+			}
+		})
+	}
+	app := &App{config: Config{VehicleVIN: "5YJ3E1EA1KF123456"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := app.readyVehicleToken(ctx); err != context.Canceled {
+		t.Fatalf("cancelled request should stop before OAuth: %v", err)
+	}
+}
 
 func TestPrepareTelemetryPreservesTokensAndEscapesCredentials(t *testing.T) {
 	directory := t.TempDir()
@@ -79,12 +298,16 @@ func TestTelemetryConfigDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
-func TestTelemetryReadDeleteForwardWithoutCertificatesOrWake(t *testing.T) {
+func TestTelemetryReadDeleteForwardWithoutCertificates(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
 		t.Run(method, func(t *testing.T) {
 			calls := 0
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
+				if method == http.MethodGet && r.Method == http.MethodGet && r.URL.Path == "/api/1/vehicles/5YJ3E1EA1KF123456" {
+					_, _ = w.Write([]byte(`{"response":{"state":"online"}}`))
+					return
+				}
 				if r.Method != method || r.URL.Path != "/api/1/vehicles/5YJ3E1EA1KF123456/fleet_telemetry_config" {
 					t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
 				}
@@ -97,12 +320,16 @@ func TestTelemetryReadDeleteForwardWithoutCertificatesOrWake(t *testing.T) {
 			defer upstream.Close()
 			config := Config{VehicleVIN: "5YJ3E1EA1KF123456", ProxyURL: upstream.URL, Telemetry: TelemetryConfig{Enabled: true}}
 			app := &App{
-				config: config, tesla: &TeslaClient{http: upstream.Client()},
+				config: config, tesla: &TeslaClient{config: config, http: upstream.Client()},
 				tokens: &TokenManager{loaded: true, tokens: TeslaTokens{AccessToken: "test-token", ExpiresAt: time.Now().Add(time.Hour).Unix()}},
 			}
 			response := httptest.NewRecorder()
 			app.routes().ServeHTTP(response, httptest.NewRequest(method, "/api/vehicle/telemetry/config", nil))
-			if calls != 1 || response.Code != http.StatusConflict || !bytes.Contains(response.Body.Bytes(), []byte(`"synced":false`)) {
+			wantCalls := 1
+			if method == http.MethodGet {
+				wantCalls = 2
+			}
+			if calls != wantCalls || response.Code != http.StatusConflict || !bytes.Contains(response.Body.Bytes(), []byte(`"synced":false`)) {
 				t.Fatalf("upstream status/body lost: calls=%d response=%s", calls, response.Body.String())
 			}
 		})
@@ -214,6 +441,10 @@ func TestTelemetryPostUsesExistingSigningProxy(t *testing.T) {
 	calls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		if r.Method == http.MethodGet && r.URL.Path == "/api/1/vehicles/5YJ3E1EA1KF123456" {
+			_, _ = w.Write([]byte(`{"response":{"state":"online"}}`))
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/api/1/vehicles/fleet_telemetry_config" {
 			t.Errorf("wrong signing endpoint: %s %s", r.Method, r.URL.Path)
 		}
@@ -240,12 +471,12 @@ func TestTelemetryPostUsesExistingSigningProxy(t *testing.T) {
 	defer upstream.Close()
 	app := &App{
 		config: Config{VehicleVIN: "5YJ3E1EA1KF123456", ProxyURL: upstream.URL, OAuthScopes: defaultOAuthScopes + " vehicle_location", Telemetry: telemetry},
-		tesla:  &TeslaClient{http: upstream.Client()},
+		tesla:  &TeslaClient{config: Config{ProxyURL: upstream.URL}, http: upstream.Client()},
 		tokens: &TokenManager{loaded: true, tokens: TeslaTokens{AccessToken: "test-token", ExpiresAt: time.Now().Add(time.Hour).Unix()}},
 	}
 	response := httptest.NewRecorder()
 	app.routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/vehicle/telemetry/config", nil))
-	if calls != 1 || response.Code != 200 || !bytes.Contains(response.Body.Bytes(), []byte(`"skipped_vehicles"`)) {
+	if calls != 2 || response.Code != 200 || !bytes.Contains(response.Body.Bytes(), []byte(`"skipped_vehicles"`)) {
 		t.Fatalf("partial upstream result not preserved: %d %s", response.Code, response.Body.String())
 	}
 }

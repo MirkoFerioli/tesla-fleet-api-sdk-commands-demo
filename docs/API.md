@@ -16,7 +16,7 @@ http://tesla-api:8000
 
 ## Fleet Telemetry
 
-Con `TESLA_TELEMETRY_ENABLED=true` sono disponibili `GET`, `POST` e `DELETE /api/vehicle/telemetry/config`. POST applica al VIN configurato i campi del profilo locale (body vuoto) oppure un body `{"fields":{"BatteryLevel":{"interval_seconds":60}}}`. Hostname, porta e CA vengono dalla configurazione locale; il proxy esistente firma la richiesta. GET legge configurazione/sincronizzazione, DELETE la rimuove senza risveglio esplicito. Stato HTTP e body Tesla vengono conservati, inclusi errori o risultati parziali con HTTP 200: controlla `synced` e i veicoli saltati.
+Con `TESLA_TELEMETRY_ENABLED=true` sono disponibili `GET`, `POST` e `DELETE /api/vehicle/telemetry/config`. POST applica al VIN configurato i campi del profilo locale (body vuoto) oppure un body `{"fields":{"BatteryLevel":{"interval_seconds":60}}}`. Hostname, porta e CA vengono dalla configurazione locale; il proxy esistente firma la richiesta. GET legge configurazione/sincronizzazione. GET e POST controllano lo stato del veicolo e, se necessario, lo risvegliano prima di inoltrare la richiesta; DELETE rimuove la configurazione senza controllo dello stato o risveglio esplicito. Stato HTTP e body della richiesta di configurazione Tesla vengono conservati, inclusi errori o risultati parziali con HTTP 200: controlla `synced` e i veicoli saltati.
 
 Il GPS richiede `vehicle_location` e nuovo consenso. La funzionalita disabilitata risponde `503`; input non valido `400`; TLS/profilo mancanti `503`; errori di trasporto `502`. POST non chiama OAuth se la configurazione locale e incompleta. Questi endpoint non scrivono su InfluxDB e non leggono lo stream MQTT. Vedi [configurazione e utilizzo](FLEET_TELEMETRY.md).
 
@@ -26,9 +26,19 @@ Il GPS richiede `vehicle_location` e nuovo consenso. La funzionalita disabilitat
 | --- | ---: | ---: | --- |
 | `GET /api/vehicle/data` | si | no | test, debug, lettura manuale immediata |
 | `POST /api/vehicle/poll` | si | si | raccolta dati periodica da Node-RED |
-| `GET /api/vehicle/latest` | no | no | leggere l'ultimo snapshot gia raccolto |
+| `GET /api/vehicle/latest` | si, solo stato/risveglio | no | leggere l'ultimo snapshot gia raccolto |
 
-In pratica: usa `poll` per costruire lo storico, `data` per guardare cosa risponde Tesla senza salvare, e `latest` per leggere l'ultimo dato gia raccolto senza richiamare Tesla.
+In pratica: usa `poll` per costruire lo storico, `data` per guardare cosa risponde Tesla senza salvare, e `latest` per leggere l'ultimo dato gia raccolto senza richiedere nuovi dati del veicolo.
+
+## Risveglio automatico
+
+Tutti i GET/POST disponibili sotto `/api/vehicle` verificano lo stato del VIN configurato dopo la validazione della richiesta e l'autenticazione OAuth. Se il veicolo non e `online`, il servizio invia `wake_up` e attende la conferma `online` prima di procedere. Se e gia online, non invia il comando di risveglio. Il parametro `wake: false` non disabilita questo comportamento.
+
+Il controllo e l'attesa di risveglio hanno un limite complessivo di 75 secondi e rispettano eventuali scadenze piu brevi o cancellazioni del chiamante. Questo limite non include OAuth, la successiva operazione Tesla o le scritture InfluxDB. Il timeout HTTP del server resta di due minuti; la prima autorizzazione OAuth interattiva puo richiedere piu tempo e rendere necessario ripetere la richiesta una volta autorizzato il servizio.
+
+Errori nella lettura dello stato, nel risveglio o nell'attesa producono HTTP 502 con un campo JSON `error`; l'operazione richiesta non viene eseguita. Anche `/latest` richiede un VIN e un token valido, e non restituisce la cache se il controllo o il risveglio falliscono. Richieste invalide o funzionalita telemetria disabilitata vengono respinte prima di OAuth e risveglio. `/health` e DELETE telemetria restano esclusi.
+
+Chiamate periodiche, anche a `/latest` o alla configurazione telemetria, possono mantenere il veicolo sveglio e aumentare i consumi.
 
 ## GET /health
 
@@ -80,17 +90,17 @@ Body opzionale:
 
 Se ometti `endpoints`, il servizio non invia quel parametro al proxy: i dati restituiti dipendono dai default e dai permessi della Fleet API. Il valore nel body, se non vuoto, ha precedenza sul parametro query `endpoints`.
 
-`data` e `poll` non eseguono un comando di risveglio esplicito: con il veicolo addormentato possono fallire. Se InfluxDB non e configurato, `poll` aggiorna comunque lo snapshot in memoria e restituisce `written: true`, ma non salva dati nel database. Se invece una scrittura InfluxDB configurata fallisce, restituisce HTTP 502 e non aggiorna lo snapshot.
+`data` e `poll` risvegliano il veicolo se necessario prima di leggere i dati. Se InfluxDB non e configurato, `poll` aggiorna comunque lo snapshot in memoria e restituisce `written: true`, ma non salva dati nel database. Se invece una scrittura InfluxDB configurata fallisce, restituisce HTTP 502 e non aggiorna lo snapshot.
 
 ## GET /api/vehicle/latest
 
-Restituisce l'ultimo snapshot ottenuto da `POST /api/vehicle/poll`.
+Controlla lo stato del veicolo e lo risveglia se necessario, poi restituisce l'ultimo snapshot ottenuto da `POST /api/vehicle/poll`. Non legge nuovi `vehicle_data` e non modifica lo snapshot o la sua data.
 
 ```bash
 curl http://localhost:8000/api/vehicle/latest
 ```
 
-Se non hai ancora eseguito un poll riuscito, torna `404`. Lo snapshot esiste solo in memoria e si perde al riavvio; `GET /api/vehicle/data` non lo aggiorna.
+Se non hai ancora eseguito un poll riuscito, torna `404` dopo il controllo e l'eventuale risveglio riusciti. Lo snapshot esiste solo in memoria e si perde al riavvio; `GET /api/vehicle/data` non lo aggiorna.
 
 ## POST /api/vehicle/command
 
@@ -130,7 +140,7 @@ Esempi:
 {"command":"set_sentry_mode","params":{"on":false},"wake":true}
 ```
 
-Se omessi, `params` diventa `{}` e `wake` vale `true`. Con `wake: false` il servizio non tenta il risveglio. Il nome comando puo contenere solo lettere, numeri, underscore e trattini; il supporto del comando e la validita dei parametri dipendono dal proxy e dalla Fleet API.
+Se omesso, `params` diventa `{}`. `wake` resta accettato per compatibilita con i payload esistenti, ma viene ignorato: anche con `wake: false` il servizio controlla lo stato e tenta il risveglio se necessario. Il nome comando puo contenere solo lettere, numeri, underscore e trattini; il supporto del comando e la validita dei parametri dipendono dal proxy e dalla Fleet API.
 
 Il servizio tenta di scrivere l'audit del comando su InfluxDB nella measurement `tesla_command`, se configurato. Un errore di audit viene registrato nei log senza cambiare la risposta del comando. La risposta HTTP 200 dell'API indica un HTTP 2xx dal proxy: controlla anche `response`, perche un risultato Tesla puo contenere `result: false`.
 

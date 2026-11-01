@@ -262,7 +262,13 @@ func (app *App) handleTelemetryConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		endpoint = app.config.ProxyURL + "/api/1/vehicles/fleet_telemetry_config"
 	}
-	token, err := app.tokens.AccessToken(r.Context())
+	var token string
+	var err error
+	if r.Method == http.MethodDelete {
+		token, err = app.tokens.AccessToken(r.Context())
+	} else {
+		token, err = app.readyVehicleToken(r.Context())
+	}
 	if err != nil {
 		writeError(w, err)
 		return

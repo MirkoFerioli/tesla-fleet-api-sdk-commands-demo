@@ -571,22 +571,22 @@ func (client *TeslaClient) ProxyHealth(ctx context.Context) error {
 func (client *TeslaClient) IsVehicleAwake(ctx context.Context, vin string, token string) (bool, error) {
 	endpoint := fmt.Sprintf("%s/api/1/vehicles/%s", client.config.ProxyURL, url.PathEscape(vin))
 	var responseData map[string]interface{}
-	status, _, err := client.doJSON(ctx, http.MethodGet, endpoint, token, nil, &responseData)
+	status, body, err := client.doJSON(ctx, http.MethodGet, endpoint, token, nil, &responseData)
 	if err != nil {
 		return false, err
 	}
 	if status < 200 || status >= 300 {
-		return false, nil
+		return false, fmt.Errorf("vehicle state request failed with status %d: %s", status, string(body))
 	}
 	if errMsg, ok := responseData["error"].(string); ok && errMsg != "" {
-		return false, nil
+		return false, fmt.Errorf("vehicle state error: %s", errMsg)
 	}
 	if vehicleData, ok := responseData["response"].(map[string]interface{}); ok {
-		if state, ok := vehicleData["state"].(string); ok {
+		if state, ok := vehicleData["state"].(string); ok && state != "" {
 			return state == "online", nil
 		}
 	}
-	return false, nil
+	return false, fmt.Errorf("vehicle state response did not include a valid state")
 }
 
 func (client *TeslaClient) WakeVehicle(ctx context.Context, vin string, token string) error {
@@ -602,12 +602,17 @@ func (client *TeslaClient) WakeVehicle(ctx context.Context, vin string, token st
 }
 
 func (client *TeslaClient) EnsureVehicleAwake(ctx context.Context, vin string, token string) error {
+	ctx, cancel := context.WithTimeout(ctx, 75*time.Second)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	awake, err := client.IsVehicleAwake(ctx, vin, token)
 	if err != nil {
-		log.Printf("vehicle awake check failed: %v", err)
+		return err
 	}
 	if awake {
-		return nil
+		return ctx.Err()
 	}
 	if err := client.WakeVehicle(ctx, vin, token); err != nil {
 		return err
@@ -624,8 +629,11 @@ func (client *TeslaClient) EnsureVehicleAwake(ctx context.Context, vin string, t
 		case <-time.After(waitTime):
 		}
 		awake, err := client.IsVehicleAwake(ctx, vin, token)
-		if err == nil && awake {
-			return nil
+		if err != nil {
+			return err
+		}
+		if awake {
+			return ctx.Err()
 		}
 	}
 	return fmt.Errorf("vehicle did not wake up")
@@ -733,6 +741,10 @@ func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *App) handleLatest(w http.ResponseWriter, r *http.Request) {
+	if _, err := app.readyVehicleToken(r.Context()); err != nil {
+		writeError(w, err)
+		return
+	}
 	app.latestMu.RLock()
 	defer app.latestMu.RUnlock()
 	if app.latest == nil {
@@ -798,20 +810,13 @@ func (app *App) handleCommand(w http.ResponseWriter, r *http.Request) {
 	if request.Params == nil {
 		request.Params = map[string]interface{}{}
 	}
-	wake := true
-	if request.Wake != nil {
-		wake = *request.Wake
-	}
 
 	started := time.Now()
 	status := "ok"
 	httpStatus := 0
 	errText := ""
 
-	token, err := app.tokens.AccessToken(r.Context())
-	if err == nil && wake {
-		err = app.tesla.EnsureVehicleAwake(r.Context(), app.config.VehicleVIN, token)
-	}
+	token, err := app.readyVehicleToken(r.Context())
 	var body []byte
 	if err == nil {
 		httpStatus, body, err = app.tesla.SendCommand(r.Context(), app.config.VehicleVIN, token, request.Command, request.Params)
@@ -831,11 +836,25 @@ func (app *App) handleCommand(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "command": request.Command, "http_status": httpStatus, "response": jsonRawOrString(body)})
 }
 
-func (app *App) fetchVehicleData(ctx context.Context, endpoints string) (map[string]interface{}, error) {
+func (app *App) readyVehicleToken(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if app.config.VehicleVIN == "" {
-		return nil, fmt.Errorf("TESLA_VEHICLE_VIN is required")
+		return "", fmt.Errorf("TESLA_VEHICLE_VIN is required")
 	}
 	token, err := app.tokens.AccessToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := app.tesla.EnsureVehicleAwake(ctx, app.config.VehicleVIN, token); err != nil {
+		return "", fmt.Errorf("vehicle readiness failed: %w", err)
+	}
+	return token, nil
+}
+
+func (app *App) fetchVehicleData(ctx context.Context, endpoints string) (map[string]interface{}, error) {
+	token, err := app.readyVehicleToken(ctx)
 	if err != nil {
 		return nil, err
 	}
