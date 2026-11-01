@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"tesla-fleet-api-service/internal/fleetconfig"
 )
 
 const defaultOAuthScopes = "openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds"
@@ -57,8 +59,12 @@ func runTelemetryCLI(config Config, args []string, output io.Writer) error {
 		if err != nil {
 			return err
 		}
+		hostname, err := telemetryHostname(config.Telemetry)
+		if err != nil {
+			return err
+		}
 		return json.NewEncoder(output).Encode(map[string]interface{}{
-			"hostname": config.Telemetry.Hostname, "port": port, "ca": ca,
+			"hostname": hostname, "port": port, "ca": ca,
 		})
 	default:
 		return fmt.Errorf("unknown option %q; use --prepare-telemetry or --check-telemetry", args[0])
@@ -72,23 +78,12 @@ func prepareTelemetry(config TelemetryConfig) error {
 	if err := os.MkdirAll(config.Directory, 0700); err != nil {
 		return err
 	}
-	serverConfig := map[string]interface{}{
-		"host": "0.0.0.0", "port": 8443, "log_level": "info", "json_log_enable": true,
-		"namespace": "tesla", "reliable_ack_sources": map[string]string{"V": "mqtt"},
-		"records": map[string][]string{
-			"V": {"mqtt"}, "alerts": {"mqtt"}, "errors": {"mqtt"}, "connectivity": {"mqtt"},
-		},
-		"mqtt": map[string]interface{}{
-			"broker": "mosquitto:1883", "client_id": "tesla-fleet-telemetry",
-			"username": config.MQTTUsername, "password": config.MQTTPassword,
-			"topic_base": "tesla", "qos": 1, "retained": false,
-		},
-		"tls": map[string]string{
-			"server_cert": "/etc/fleet-telemetry/fullchain.pem",
-			"server_key":  "/etc/fleet-telemetry/server-key.pem",
-		},
-	}
-	encoded, err := json.MarshalIndent(serverConfig, "", "  ")
+	encoded, err := fleetconfig.ServerConfig(
+		config.MQTTUsername,
+		config.MQTTPassword,
+		"/etc/fleet-telemetry/fullchain.pem",
+		"/etc/fleet-telemetry/server-key.pem",
+	)
 	if err != nil {
 		return err
 	}
@@ -97,7 +92,7 @@ func prepareTelemetry(config TelemetryConfig) error {
 	if err != nil {
 		return fmt.Errorf("create telemetry config (existing files are never overwritten): %w", err)
 	}
-	_, writeErr := file.Write(append(encoded, '\n'))
+	_, writeErr := file.Write(encoded)
 	closeErr := file.Close()
 	if writeErr != nil {
 		return writeErr
@@ -107,7 +102,10 @@ func prepareTelemetry(config TelemetryConfig) error {
 
 func validateTelemetryTLS(config TelemetryConfig) (int, string, error) {
 	label := regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
-	host := config.Hostname
+	host, err := telemetryHostname(config)
+	if err != nil {
+		return 0, "", err
+	}
 	if len(host) > 253 || !strings.Contains(host, ".") || net.ParseIP(host) != nil {
 		return 0, "", fmt.Errorf("TESLA_TELEMETRY_HOSTNAME must be a public DNS hostname, not a URL or IP")
 	}
@@ -171,6 +169,21 @@ func validateTelemetryTLS(config TelemetryConfig) (int, string, error) {
 		return 0, "", fmt.Errorf("telemetry certificate verification: %w", err)
 	}
 	return port, string(ca), nil
+}
+
+func telemetryHostname(config TelemetryConfig) (string, error) {
+	if hostname := strings.TrimSpace(config.Hostname); hostname != "" {
+		return hostname, nil
+	}
+	data, err := os.ReadFile(filepath.Join(config.Directory, "hostname"))
+	if err != nil {
+		return "", fmt.Errorf("TESLA_TELEMETRY_HOSTNAME is empty and no hostname file is available: %w", err)
+	}
+	hostname := strings.TrimSpace(string(data))
+	if hostname == "" {
+		return "", fmt.Errorf("telemetry hostname file is empty")
+	}
+	return hostname, nil
 }
 
 type TelemetryField struct {
@@ -254,10 +267,15 @@ func (app *App) handleTelemetryConfig(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 			return
 		}
+		hostname, err := telemetryHostname(app.config.Telemetry)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+			return
+		}
 		payload = map[string]interface{}{
 			"vins": []string{app.config.VehicleVIN},
 			"config": map[string]interface{}{
-				"hostname": app.config.Telemetry.Hostname, "port": port, "ca": ca, "fields": request.Fields,
+				"hostname": hostname, "port": port, "ca": ca, "fields": request.Fields,
 			},
 		}
 		endpoint = app.config.ProxyURL + "/api/1/vehicles/fleet_telemetry_config"

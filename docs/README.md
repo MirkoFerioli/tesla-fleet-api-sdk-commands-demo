@@ -11,4 +11,5 @@ Guide operative del progetto. Per una panoramica e l'avvio rapido, consulta il [
 | [Fleet Telemetry](FLEET_TELEMETRY.md) | Ricevitore mTLS opzionale, configurazione auto, GPS e MQTT verso MySQL |
 | [Fleet Telemetry: guida semplice](FLEET_TELEMETRY_GUIDA_SEMPLICE.md) | Tutti i passi per l'attivazione, spiegati senza richiedere conoscenze di programmazione |
 | [Fleet Telemetry: VPN e certificati](FLEET_TELEMETRY_VPN_LETSENCRYPT.md) | Pacchetto Compose Tailscale, script iniziale e rinnovo automatico Let's Encrypt |
+| [Installazione Windows per clienti](INSTALLAZIONE_CLIENTE_WINDOWS.md) | Creazione del pacchetto e installazione guidata su Windows con Docker Desktop e Tailscale Funnel |
 | [Grafana](GRAFANA.md) | Datasource InfluxDB, dashboard e query Flux |

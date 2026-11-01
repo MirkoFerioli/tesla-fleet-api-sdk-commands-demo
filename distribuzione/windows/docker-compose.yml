@@ -1,0 +1,304 @@
+name: tesla-fleet
+
+services:
+  tailscale:
+    image: docker.io/tailscale/tailscale:v1.104.1
+    pull_policy: never
+    user: "0:0"
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_USERSPACE: "true"
+      TS_AUTH_ONCE: "true"
+      TS_ACCEPT_DNS: "false"
+      TS_HOSTNAME: ${TAILSCALE_HOSTNAME:-tesla-telemetry}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      TS_SERVE_CONFIG: /etc/tailscale/funnel.json
+      TS_BOOT_TIMEOUT: 10m
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - tailscale-socket:/var/run/tailscale
+      - type: bind
+        source: ./tailscale
+        target: /etc/tailscale
+        read_only: true
+        bind:
+          create_host_path: false
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    networks: [tesla-network]
+
+  telemetry-certificates:
+    image: ghcr.io/mirkoferioli/tesla-telemetry-certificates:${TESLA_VERSION:?Imposta TESLA_VERSION nel file .env}
+    pull_policy: never
+    user: "0:0"
+    environment:
+      TELEMETRY_UID: "1000"
+      TELEMETRY_GID: "1000"
+    depends_on:
+      tailscale:
+        condition: service_started
+    volumes:
+      - tailscale-socket:/var/run/tailscale:ro
+      - telemetry-certs:/certificates
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, /telemetry-runtime, health]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
+    restart: unless-stopped
+    networks: [tesla-network]
+
+  fleet-telemetry:
+    image: ghcr.io/mirkoferioli/tesla-telemetry-receiver:${TESLA_VERSION}
+    pull_policy: never
+    user: "1000:1000"
+    entrypoint: [/telemetry-runtime]
+    command: [receive]
+    environment:
+      CERT_DIRECTORY: /etc/fleet-telemetry/certificates
+      FLEET_TELEMETRY_CONFIG: /tmp/server-config.json
+      MQTT_USERNAME: ${MQTT_USERNAME:?Imposta MQTT_USERNAME nel file .env}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?Imposta MQTT_PASSWORD nel file .env}
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      telemetry-certificates:
+        condition: service_started
+    volumes:
+      - telemetry-certs:/etc/fleet-telemetry/certificates:ro
+    tmpfs:
+      - /tmp
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 20s
+    restart: unless-stopped
+    networks: [tesla-network]
+
+  tesla-proxy:
+    image: ghcr.io/mirkoferioli/tesla-proxy:${TESLA_VERSION}
+    pull_policy: never
+    volumes:
+      - proxy-tls:/tls
+      - type: bind
+        source: ./config/fleet-key.pem
+        target: /config/fleet-key.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      TESLA_HTTP_PROXY_TLS_CERT: /tls/tls-cert.pem
+      TESLA_HTTP_PROXY_TLS_KEY: /tls/tls-key.pem
+      TESLA_HTTP_PROXY_HOST: 0.0.0.0
+      TESLA_HTTP_PROXY_PORT: "4443"
+      TESLA_HTTP_PROXY_TIMEOUT: 30s
+    command:
+      - -tls-key
+      - /tls/tls-key.pem
+      - -cert
+      - /tls/tls-cert.pem
+      - -key-file
+      - /config/fleet-key.pem
+      - -host
+      - 0.0.0.0
+      - -port
+      - "4443"
+    healthcheck:
+      test: ["CMD", "proxy-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks: [tesla-network]
+
+  tesla-api:
+    image: ghcr.io/mirkoferioli/tesla-api:${TESLA_VERSION}
+    pull_policy: never
+    depends_on:
+      tesla-proxy:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - tesla-data:/app/data
+      - telemetry-certs:/app/telemetry-certs:ro
+    environment:
+      TESLA_CLIENT_ID: ${TESLA_CLIENT_ID:?Imposta TESLA_CLIENT_ID nel file .env}
+      TESLA_CLIENT_SECRET: ${TESLA_CLIENT_SECRET:?Imposta TESLA_CLIENT_SECRET nel file .env}
+      TESLA_VEHICLE_VIN: ${TESLA_VEHICLE_VIN:?Imposta TESLA_VEHICLE_VIN nel file .env}
+      TESLA_REDIRECT_URI: http://localhost:8080/callback
+      TESLA_OAUTH_SCOPES: ${TESLA_OAUTH_SCOPES:-openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds vehicle_location}
+      TESLA_API_LISTEN_ADDR: ":8000"
+      TESLA_PROXY_URL: https://tesla-proxy:4443
+      TESLA_TOKEN_PATH: /app/data/tesla-tokens.json
+      TESLA_RESET_TOKEN_ON_START: "false"
+      TESLA_TELEMETRY_ENABLED: ${TESLA_TELEMETRY_ENABLED:-false}
+      TESLA_TELEMETRY_DIR: /app/telemetry-certs/current
+      TESLA_TELEMETRY_PORT: "443"
+      TESLA_TELEMETRY_FIELDS: telemetry/vehicle-fields.json
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_ORG: tesla
+      INFLUX_BUCKET: vehicle
+      INFLUX_TOKEN: ${INFLUX_ADMIN_TOKEN:?Imposta INFLUX_ADMIN_TOKEN nel file .env}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+    networks: [tesla-network]
+
+  influxdb:
+    image: docker.io/library/influxdb:2.9.1
+    pull_policy: never
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_ADMIN_USER:-admin}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_ADMIN_PASSWORD:?Imposta INFLUX_ADMIN_PASSWORD nel file .env}
+      DOCKER_INFLUXDB_INIT_ORG: tesla
+      DOCKER_INFLUXDB_INIT_BUCKET: vehicle
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_ADMIN_TOKEN}
+    healthcheck:
+      test: ["CMD", "influx", "ping", "--host", "http://localhost:8086"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+    networks: [tesla-network]
+
+  mosquitto:
+    image: docker.io/library/eclipse-mosquitto:2.0.22
+    pull_policy: never
+    volumes:
+      - type: bind
+        source: ./mosquitto/mosquitto.conf
+        target: /mosquitto/config/mosquitto.conf
+        read_only: true
+        bind:
+          create_host_path: false
+      - mosquitto-data:/mosquitto/data
+    environment:
+      MQTT_USERNAME: ${MQTT_USERNAME:?Imposta MQTT_USERNAME nel file .env}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?Imposta MQTT_PASSWORD nel file .env}
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        if [ -f /mosquitto/data/passwd ]; then
+          mosquitto_passwd -b /mosquitto/data/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD";
+        else
+          mosquitto_passwd -b -c /mosquitto/data/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD";
+        fi &&
+        exec mosquitto -c /mosquitto/config/mosquitto.conf
+    healthcheck:
+      test: [CMD-SHELL, test -s /mosquitto/data/passwd]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+    networks: [tesla-network]
+
+  mysql:
+    image: docker.io/library/mysql:26.7
+    pull_policy: never
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - type: bind
+        source: ./mysql/init
+        target: /docker-entrypoint-initdb.d
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Imposta MYSQL_ROOT_PASSWORD nel file .env}
+      MYSQL_DATABASE: tesla
+      MYSQL_USER: ${MYSQL_USER:-tesla_nodered}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Imposta MYSQL_PASSWORD nel file .env}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mysqladmin ping -h 127.0.0.1 -u"$${MYSQL_USER}" -p"$${MYSQL_PASSWORD}" --silent'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    networks: [tesla-network]
+
+  node-red:
+    image: ghcr.io/mirkoferioli/tesla-node-red:${TESLA_VERSION}
+    pull_policy: never
+    depends_on:
+      tesla-api:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:11880:1880"
+    volumes:
+      - node-red-data:/data
+    restart: unless-stopped
+    networks: [tesla-network]
+
+  grafana:
+    image: docker.io/grafana/grafana-oss:13.0.2
+    pull_policy: never
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:13000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - type: bind
+        source: ./grafana/provisioning
+        target: /etc/grafana/provisioning
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./grafana/dashboards
+        target: /var/lib/grafana/dashboards
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Imposta GRAFANA_ADMIN_PASSWORD nel file .env}
+      INFLUX_TOKEN: ${INFLUX_ADMIN_TOKEN}
+    restart: unless-stopped
+    networks: [tesla-network]
+
+networks:
+  tesla-network:
+    driver: bridge
+
+volumes:
+  proxy-tls:
+  tesla-data:
+  telemetry-certs:
+  tailscale-state:
+  tailscale-socket:
+  influxdb-data:
+  mosquitto-data:
+  mysql-data:
+  node-red-data:
+  grafana-data:

@@ -12,4 +12,5 @@ influxdb-data/
 node-red-data/
 grafana-data/
 *.md
+dist/
 helm

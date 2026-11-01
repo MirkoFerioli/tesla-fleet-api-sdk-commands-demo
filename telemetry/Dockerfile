@@ -1,6 +1,7 @@
 FROM docker.io/golang:1.24-alpine AS builder
 WORKDIR /src
 COPY go.mod ./
+COPY internal ./internal
 COPY telemetry/runtime ./telemetry/runtime
 RUN CGO_ENABLED=0 go build -trimpath -o /telemetry-runtime ./telemetry/runtime
 

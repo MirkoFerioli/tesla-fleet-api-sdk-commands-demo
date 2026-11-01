@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -350,6 +351,56 @@ func TestRenewalCommandFailureKeepsActiveGeneration(t *testing.T) {
 	}
 	if current, _ := os.Readlink(filepath.Join(shortDirectory, "current")); current == previous {
 		t.Fatal("recovered renewal not published")
+	}
+}
+
+func TestReceiverCommandGeneratesConfigOnlyWhenOptedIn(t *testing.T) {
+	t.Setenv("FLEET_TELEMETRY_CONFIG", "")
+	t.Setenv("MQTT_USERNAME", "")
+	t.Setenv("MQTT_PASSWORD", "")
+	legacy, err := receiverCommand("/certificates")
+	if err != nil || !reflect.DeepEqual(legacy, []string{"/fleet-telemetry", "-config", "/etc/fleet-telemetry/server-config.json"}) {
+		t.Fatalf("unexpected legacy command %v: %v", legacy, err)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "tmp", "server-config.json")
+	t.Setenv("FLEET_TELEMETRY_CONFIG", configPath)
+	t.Setenv("MQTT_USERNAME", "client-user")
+	t.Setenv("MQTT_PASSWORD", "quoted\"secret\\value\n")
+	command, err := receiverCommand("/etc/fleet-telemetry/certificates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(command, []string{"/fleet-telemetry", "-config", configPath}) {
+		t.Fatalf("unexpected generated-config command: %v", command)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		MQTT struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		} `json:"mqtt"`
+		TLS struct {
+			Certificate string `json:"server_cert"`
+			Key         string `json:"server_key"`
+		} `json:"tls"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.MQTT.Username != "client-user" || config.MQTT.Password != "quoted\"secret\\value\n" {
+		t.Fatalf("MQTT credentials were not encoded correctly: %+v", config.MQTT)
+	}
+	if config.TLS.Certificate != "/etc/fleet-telemetry/certificates/current/fullchain.pem" ||
+		config.TLS.Key != "/etc/fleet-telemetry/certificates/current/server-key.pem" {
+		t.Fatalf("unexpected TLS paths: %+v", config.TLS)
+	}
+	info, err := os.Stat(configPath)
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("generated config permissions: %v", err)
 	}
 }
 

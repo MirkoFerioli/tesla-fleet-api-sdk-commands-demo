@@ -39,12 +39,17 @@ services:
       - TESLA_HTTP_PROXY_PORT=4443
       - TESLA_HTTP_PROXY_TIMEOUT=30s
       - TESLA_VERBOSE=true
-    command: >
-      -tls-key /config/tls-key.pem
-      -cert /config/tls-cert.pem
-      -key-file /config/fleet-key.pem
-      -host 0.0.0.0
-      -port 4443
+    command:
+      - -tls-key
+      - /config/tls-key.pem
+      - -cert
+      - /config/tls-cert.pem
+      - -key-file
+      - /config/fleet-key.pem
+      - -host
+      - 0.0.0.0
+      - -port
+      - "4443"
     healthcheck:
       test: ["CMD", "proxy-healthcheck"]
       interval: 10s

@@ -1,0 +1,10 @@
+{
+  "TCP": {
+    "443": {
+      "TCPForward": "fleet-telemetry:8443"
+    }
+  },
+  "AllowFunnel": {
+    "${TS_CERT_DOMAIN}:443": true
+  }
+}

@@ -16,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"tesla-fleet-api-service/internal/fleetconfig"
 )
 
 type certificateStatus struct {
@@ -39,7 +41,11 @@ func main() {
 	case "renew":
 		err = renewLoop(ctx, directory)
 	case "receive":
-		err = supervise(ctx, directory, 5*time.Second, []string{"/fleet-telemetry", "-config", "/etc/fleet-telemetry/server-config.json"})
+		var command []string
+		command, err = receiverCommand(directory)
+		if err == nil {
+			err = supervise(ctx, directory, 5*time.Second, command)
+		}
 	case "hostname":
 		var hostname string
 		hostname, err = nodeHostname(ctx)
@@ -83,6 +89,34 @@ func main() {
 	if err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatal(err)
 	}
+}
+
+func receiverCommand(directory string) ([]string, error) {
+	configPath := os.Getenv("FLEET_TELEMETRY_CONFIG")
+	if configPath == "" {
+		return []string{"/fleet-telemetry", "-config", "/etc/fleet-telemetry/server-config.json"}, nil
+	}
+	username, password := os.Getenv("MQTT_USERNAME"), os.Getenv("MQTT_PASSWORD")
+	if username == "" || password == "" {
+		return nil, fmt.Errorf("MQTT_USERNAME and MQTT_PASSWORD are required when FLEET_TELEMETRY_CONFIG is set")
+	}
+	certificateDirectory := filepath.Join(directory, "current")
+	config, err := fleetconfig.ServerConfig(
+		username,
+		password,
+		filepath.Join(certificateDirectory, "fullchain.pem"),
+		filepath.Join(certificateDirectory, "server-key.pem"),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
+		return nil, fmt.Errorf("create telemetry config directory: %w", err)
+	}
+	if err := atomicWrite(configPath, config, 0600); err != nil {
+		return nil, fmt.Errorf("write generated telemetry config: %w", err)
+	}
+	return []string{"/fleet-telemetry", "-config", configPath}, nil
 }
 
 func env(name, fallback string) string {
@@ -213,7 +247,7 @@ func renewOnce(ctx context.Context, directory string) error {
 }
 
 func renewLoop(ctx context.Context, directory string) error {
-	if err := os.MkdirAll(directory, 0700); err != nil {
+	if err := os.MkdirAll(directory, 0755); err != nil {
 		return err
 	}
 	lock, err := os.OpenFile(filepath.Join(directory, ".renew.lock"), os.O_CREATE|os.O_RDWR, 0600)

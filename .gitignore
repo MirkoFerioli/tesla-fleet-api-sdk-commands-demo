@@ -20,6 +20,7 @@ tesla-api.exe
 influxdb-data/
 node-red-data/
 grafana-data/
+dist/
 
 # IDE
 .vscode/

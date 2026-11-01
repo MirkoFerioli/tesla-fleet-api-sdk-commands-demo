@@ -17,7 +17,11 @@ func main() {
 }
 
 func checkHealth() error {
-	certificate, err := os.ReadFile("/config/tls-cert.pem")
+	certificatePath := os.Getenv("TESLA_HTTP_PROXY_TLS_CERT")
+	if certificatePath == "" {
+		certificatePath = "/config/tls-cert.pem"
+	}
+	certificate, err := os.ReadFile(certificatePath)
 	if err != nil {
 		return err
 	}

@@ -436,8 +436,50 @@ func TestTelemetryCertificateValidation(t *testing.T) {
 	}
 }
 
+func TestTelemetryHostnameFallsBackToCertificateBundle(t *testing.T) {
+	config := telemetryTLSFixture(t, time.Now().Add(time.Hour))
+	config.Hostname = ""
+	if err := os.WriteFile(filepath.Join(config.Directory, "hostname"), []byte("telemetry.myfleet.net\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	hostname, err := telemetryHostname(config)
+	if err != nil || hostname != "telemetry.myfleet.net" {
+		t.Fatalf("hostname fallback = %q, %v", hostname, err)
+	}
+	if port, _, err := validateTelemetryTLS(config); err != nil || port != 443 {
+		t.Fatalf("TLS validation did not use fallback hostname: port=%d err=%v", port, err)
+	}
+	var output bytes.Buffer
+	if err := runTelemetryCLI(Config{Telemetry: config}, []string{"--check-telemetry"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Hostname string `json:"hostname"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil || result.Hostname != "telemetry.myfleet.net" {
+		t.Fatalf("check output hostname = %q, %v", result.Hostname, err)
+	}
+}
+
+func TestTelemetryHostnameFallbackRequiresNonemptyFile(t *testing.T) {
+	config := TelemetryConfig{Directory: t.TempDir()}
+	if _, err := telemetryHostname(config); err == nil {
+		t.Fatal("missing hostname file should return an explicit error")
+	}
+	if err := os.WriteFile(filepath.Join(config.Directory, "hostname"), []byte(" \n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := telemetryHostname(config); err == nil {
+		t.Fatal("empty hostname file should return an explicit error")
+	}
+}
+
 func TestTelemetryPostUsesExistingSigningProxy(t *testing.T) {
 	telemetry := telemetryTLSFixture(t, time.Now().Add(time.Hour))
+	telemetry.Hostname = ""
+	if err := os.WriteFile(filepath.Join(telemetry.Directory, "hostname"), []byte("telemetry.myfleet.net\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	calls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -463,7 +505,7 @@ func TestTelemetryPostUsesExistingSigningProxy(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
 		}
-		if len(request.VINs) != 1 || request.VINs[0] != "5YJ3E1EA1KF123456" || request.Config.Hostname != telemetry.Hostname || request.Config.Port != 443 || request.Config.Fields["Location"].IntervalSeconds != 10 || request.Config.CA == "" {
+		if len(request.VINs) != 1 || request.VINs[0] != "5YJ3E1EA1KF123456" || request.Config.Hostname != "telemetry.myfleet.net" || request.Config.Port != 443 || request.Config.Fields["Location"].IntervalSeconds != 10 || request.Config.CA == "" {
 			t.Errorf("unexpected request: %+v", request)
 		}
 		_, _ = w.Write([]byte(`{"response":{"updated_vehicles":0,"skipped_vehicles":{"missing_key":["5YJ3E1EA1KF123456"]}}}`))
