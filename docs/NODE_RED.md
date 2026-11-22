@@ -2,19 +2,21 @@
 
 Node-RED deve orchestrare automazioni chiamando `tesla-api`. Non deve scrivere su InfluxDB e non deve contenere token Tesla.
 
+Per configurare i nodi HTTP Request, gli oggetti JSON e risolvere gli errori delle chiamate GET/POST, segui la [guida passo per passo agli endpoint](NODE_RED_ENDPOINTS.md).
+
 Lo stack include anche Mosquitto e MySQL. Il [flow importabile](../node-red/flows/tesla-mqtt-to-mysql.json) salva i messaggi JSON ricevuti sui topic `tesla/#` nella tabella `tesla.mqtt_messages`.
 
 ### Importazione flow MQTT → MySQL
 
 1. Avvia lo stack dopo aver impostato le credenziali MQTT e MySQL nel file `.env`.
-2. Apri `http://localhost:1880` e importa il file [tesla-mqtt-to-mysql.json](../node-red/flows/tesla-mqtt-to-mysql.json) dal menu Import.
+2. Apri `http://localhost:11880` e importa il file [tesla-mqtt-to-mysql.json](../node-red/flows/tesla-mqtt-to-mysql.json) dal menu Import.
 3. Apri la configurazione del broker Mosquitto e inserisci `MQTT_USERNAME` e `MQTT_PASSWORD`.
 4. Apri la configurazione MySQL e inserisci `MYSQL_USER` e `MYSQL_PASSWORD`. Host, porta e database sono già impostati su `mysql:3306` e `tesla`.
 5. Distribuisci il flow. Ogni messaggio JSON su `tesla/#` viene aggiunto a `mqtt_messages`; il database assegna l'ora UTC di ricezione.
 
 La palette `node-red-node-mysql` è installata nell'immagine Node-RED ed è fissata alla versione `3.0.4`. Le credenziali non sono incluse nel flow esportato.
 
-Il flow non viene importato automaticamente. Con il profilo [Fleet Telemetry](FLEET_TELEMETRY.md) attivo, il ricevitore ufficiale pubblica i segnali Tesla sotto `tesla/<VIN>/...`; altrimenti serve un publisher o un'automazione MQTT. La sottoscrizione usa QoS 1 e payload buffer: la funzione decodifica il JSON una sola volta e lo serializza per l'insert parametrizzato. Conserva numeri, stringhe numeriche, booleani, oggetti e `null`; i messaggi non JSON restano stringhe. Non aggiungere un nodo JSON prima della funzione, per evitare una seconda decodifica. Il VIN e nel topic, non necessariamente nel payload.
+Il flow non viene importato automaticamente e richiede un publisher o un'automazione MQTT sui topic `tesla/#`. La sottoscrizione usa QoS 1 e payload buffer: la funzione decodifica il JSON una sola volta e lo serializza per l'insert parametrizzato. Conserva numeri, stringhe numeriche, booleani, oggetti e `null`; i messaggi non JSON restano stringhe. Non aggiungere un nodo JSON prima della funzione, per evitare una seconda decodifica.
 
 Se aggiorni un'installazione precedente, sostituisci il flow esistente invece di attivare una seconda copia. Le credenziali restano nelle configurazioni dei nodi e vanno verificate prima di Deploy. QoS 1 puo produrre duplicati e non garantisce un commit MySQL: il flow non implementa una coda offline o deduplicazione.
 
@@ -24,8 +26,8 @@ La tabella viene creata dagli script `mysql/init` solo alla prima inizializzazio
 
 | Servizio | Endpoint dai container | Porta host |
 |---|---|---|
-| Mosquitto MQTT | `mosquitto:1883` | `1883` |
-| MySQL | `mysql:3306` | `3306` |
+| Mosquitto MQTT | `mosquitto:1883` | `11883` |
+| MySQL | `mysql:3306` | `13306` |
 
 Le porte host sono pubblicate su tutte le interfacce per consentire connessioni dalla LAN. MQTT su porta `1883` non cifra il traffico: usa credenziali robuste e limita l'accesso con il firewall a una rete fidata. Non esporre questi servizi direttamente a Internet.
 
@@ -43,13 +45,13 @@ Nel compose attuale e pubblicato cosi:
 
 ```yaml
 ports:
-  - "1880:1880"
+  - "11880:1880"
 ```
 
 Quindi l'editor web e disponibile da:
 
 ```text
-http://localhost:1880
+http://localhost:11880
 ```
 
 Questa esposizione serve al browser, non ai container. Per le chiamate interne Docker, Node-RED raggiunge `tesla-api` usando la rete condivisa `tesla-network` e l'hostname `http://tesla-api:8000`.
@@ -58,14 +60,14 @@ Se vuoi usare Node-RED solo dal computer locale, puoi restringere la porta all'i
 
 ```yaml
 ports:
-  - "127.0.0.1:1880:1880"
+  - "127.0.0.1:11880:1880"
 ```
 
 Se invece vuoi aprire l'editor Node-RED da altri dispositivi nella LAN, lascia:
 
 ```yaml
 ports:
-  - "1880:1880"
+  - "11880:1880"
 ```
 
 In quel caso configura autenticazione o proteggi l'accesso con VPN/reverse proxy: dall'editor Node-RED si possono creare flow che chiamano servizi interni.
@@ -91,7 +93,7 @@ Payload consigliato:
 }
 ```
 
-Non usare polling troppo frequente: aumenta le richieste Fleet API e puo comportare costi e limiti di utilizzo. Il servizio non esegue un risveglio esplicito per il polling; le richieste possono fallire se il veicolo dorme. Evita di aggiungere un risveglio automatico a ogni polling se non necessario, per limitare il consumo di batteria.
+Non usare polling troppo frequente: aumenta le richieste Fleet API e puo comportare costi e limiti di utilizzo. Il servizio controlla lo stato del veicolo e tenta il risveglio se necessario prima della lettura. Non aggiungere un ulteriore risveglio nel flow; considera i consumi di batteria quando pianifichi le richieste.
 
 ## Flow comando generico
 
@@ -161,7 +163,7 @@ Usa questo endpoint se vuoi far decidere Node-RED sull'ultimo snapshot gia letto
 GET http://tesla-api:8000/api/vehicle/latest
 ```
 
-Questo non chiama Tesla e non scrive su InfluxDB.
+Questo non legge nuovi `vehicle_data` e non scrive su InfluxDB, ma chiama Tesla per controllare lo stato del veicolo e puo risvegliarlo prima di restituire lo snapshot.
 
 ## Test da container Node-RED
 

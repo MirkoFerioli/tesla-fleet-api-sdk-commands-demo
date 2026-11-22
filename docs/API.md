@@ -14,12 +14,6 @@ Base URL dagli altri container nella stessa rete Docker:
 http://tesla-api:8000
 ```
 
-## Fleet Telemetry
-
-Con `TESLA_TELEMETRY_ENABLED=true` sono disponibili `GET`, `POST` e `DELETE /api/vehicle/telemetry/config`. POST applica al VIN configurato i campi del profilo locale (body vuoto) oppure un body `{"fields":{"BatteryLevel":{"interval_seconds":60}}}`. Hostname, porta e CA vengono dalla configurazione locale; il proxy esistente firma la richiesta. GET legge configurazione/sincronizzazione. GET e POST controllano lo stato del veicolo e, se necessario, lo risvegliano prima di inoltrare la richiesta; DELETE rimuove la configurazione senza controllo dello stato o risveglio esplicito. Stato HTTP e body della richiesta di configurazione Tesla vengono conservati, inclusi errori o risultati parziali con HTTP 200: controlla `synced` e i veicoli saltati.
-
-Il GPS richiede `vehicle_location` e nuovo consenso. La funzionalita disabilitata risponde `503`; input non valido `400`; TLS/profilo mancanti `503`; errori di trasporto `502`. POST non chiama OAuth se la configurazione locale e incompleta. Questi endpoint non scrivono su InfluxDB e non leggono lo stream MQTT. Vedi [configurazione e utilizzo](FLEET_TELEMETRY.md).
-
 ## Differenza tra data, poll e latest
 
 | Endpoint | Chiama Tesla | Scrive su InfluxDB | Uso principale |
@@ -36,9 +30,9 @@ Tutti i GET/POST disponibili sotto `/api/vehicle` verificano lo stato del VIN co
 
 Il controllo e l'attesa di risveglio hanno un limite complessivo di 75 secondi e rispettano eventuali scadenze piu brevi o cancellazioni del chiamante. Questo limite non include OAuth, la successiva operazione Tesla o le scritture InfluxDB. Il timeout HTTP del server resta di due minuti; la prima autorizzazione OAuth interattiva puo richiedere piu tempo e rendere necessario ripetere la richiesta una volta autorizzato il servizio.
 
-Errori nella lettura dello stato, nel risveglio o nell'attesa producono HTTP 502 con un campo JSON `error`; l'operazione richiesta non viene eseguita. Anche `/latest` richiede un VIN e un token valido, e non restituisce la cache se il controllo o il risveglio falliscono. Richieste invalide o funzionalita telemetria disabilitata vengono respinte prima di OAuth e risveglio. `/health` e DELETE telemetria restano esclusi.
+Errori nella lettura dello stato, nel risveglio o nell'attesa producono HTTP 502 con un campo JSON `error`; l'operazione richiesta non viene eseguita. Anche `/latest` richiede un VIN e un token valido, e non restituisce la cache se il controllo o il risveglio falliscono. Le richieste invalide vengono respinte prima di OAuth e risveglio; `/health` resta escluso.
 
-Chiamate periodiche, anche a `/latest` o alla configurazione telemetria, possono mantenere il veicolo sveglio e aumentare i consumi.
+Chiamate periodiche, anche a `/latest`, possono mantenere il veicolo sveglio e aumentare i consumi.
 
 ## GET /health
 

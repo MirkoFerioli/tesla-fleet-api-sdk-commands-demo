@@ -22,6 +22,8 @@ import (
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 )
 
+const defaultOAuthScopes = "openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds"
+
 type Config struct {
 	ClientID          string
 	ClientSecret      string
@@ -37,7 +39,6 @@ type Config struct {
 	InfluxBucket      string
 	TeslaTimeout      time.Duration
 	OAuthScopes       string
-	Telemetry         TelemetryConfig
 }
 
 type TeslaTokens struct {
@@ -85,13 +86,10 @@ type PollRequest struct {
 }
 
 func main() {
-	config := loadConfig()
 	if len(os.Args) > 1 {
-		if err := runTelemetryCLI(config, os.Args[1:], os.Stdout); err != nil {
-			log.Fatal(err)
-		}
-		return
+		log.Fatalf("unexpected argument %q: this service does not accept command-line arguments", os.Args[1])
 	}
+	config := loadConfig()
 
 	if config.ResetTokenOnStart {
 		if err := resetTokenFile(config.TokenPath); err != nil {
@@ -140,9 +138,6 @@ func (app *App) routes() http.Handler {
 	mux.HandleFunc("GET /api/vehicle/data", app.handleVehicleData)
 	mux.HandleFunc("POST /api/vehicle/poll", app.handlePoll)
 	mux.HandleFunc("POST /api/vehicle/command", app.handleCommand)
-	mux.HandleFunc("GET /api/vehicle/telemetry/config", app.handleTelemetryConfig)
-	mux.HandleFunc("POST /api/vehicle/telemetry/config", app.handleTelemetryConfig)
-	mux.HandleFunc("DELETE /api/vehicle/telemetry/config", app.handleTelemetryConfig)
 	return requestLogger(mux)
 }
 
@@ -171,7 +166,6 @@ func loadConfig() Config {
 		InfluxBucket:      envValue(envFile, "INFLUX_BUCKET", ""),
 		TeslaTimeout:      30 * time.Second,
 		OAuthScopes:       envValue(envFile, "TESLA_OAUTH_SCOPES", defaultOAuthScopes),
-		Telemetry:         loadTelemetryConfig(envFile),
 	}
 }
 

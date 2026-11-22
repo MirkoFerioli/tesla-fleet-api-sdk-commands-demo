@@ -4,16 +4,7 @@ Stack locale per automazioni Tesla con Go, Tesla Vehicle Command proxy, InfluxDB
 
 Il servizio Go `tesla-api` e il punto di integrazione principale: gestisce OAuth Tesla, chiama il proxy Tesla, espone endpoint HTTP per Node-RED e scrive direttamente su InfluxDB.
 
-Fleet Telemetry e disponibile come integrazione opzionale: l'auto invia dati al ricevitore mTLS ufficiale, che li pubblica su Mosquitto; il flow Node-RED esistente li salva su MySQL. Riutilizza OAuth e chiave virtuale gia configurati. Vedi la [guida Fleet Telemetry](docs/FLEET_TELEMETRY.md) per preparazione locale, dominio/certificati, consenso GPS e attivazione esplicita. Non si attiva con l'avvio standard dello stack.
-
-Per il pacchetto ridistribuibile con Tailscale Funnel e rinnovo Let's Encrypt
-nei container, esegui `bash setup-telemetry.sh setup` seguendo la
-[guida VPN e certificati](docs/FLEET_TELEMETRY_VPN_LETSENCRYPT.md).
-Non servono Tailscale sull'host, timer o Kubernetes/cert-manager. Ogni destinatario
-deve autorizzare il proprio nodo. Il setup non attiva l'auto. La porta telemetry
-diretta ora richiede l'override esplicito
-[docker-compose.telemetry-public.yml](docker-compose.telemetry-public.yml),
-alternativo all'override Tailscale.
+Il flow MQTT verso MySQL puo archiviare messaggi di publisher esterni o automazioni Node-RED; lo stack non include un publisher MQTT per i dati del veicolo.
 
 ## Servizi
 
@@ -22,11 +13,15 @@ Docker Compose avvia l'API Tesla, il proxy, InfluxDB, Mosquitto, MySQL, Node-RED
 | Servizio | URL host |
 |---|---|
 | API Tesla | `http://localhost:8000` |
-| Node-RED | `http://localhost:1880` |
-| Grafana | `http://localhost:3000` |
-| InfluxDB | `http://localhost:8086` |
-| MQTT | `mqtt://localhost:1883` |
-| MySQL | `localhost:3306` |
+| Callback OAuth | `http://localhost:8080/callback` |
+| Proxy Tesla | `https://localhost:4443` |
+| Node-RED | `http://localhost:11880` |
+| Grafana | `http://localhost:13000` |
+| InfluxDB | `http://localhost:18086` |
+| MQTT | `mqtt://localhost:11883` |
+| MySQL | `localhost:13306` |
+
+Il callback OAuth e disponibile solo durante l'autorizzazione.
 
 ## Prerequisiti
 
@@ -55,6 +50,8 @@ touch tesla-tokens.json
 ```
 
 Avvia lo stack:
+
+Se la shell contiene `COMPOSE_FILE` o `COMPOSE_PROFILES` di una configurazione precedente, aggiornali o rimuovili prima dell'avvio.
 
 ```bash
 docker compose up --build -d
